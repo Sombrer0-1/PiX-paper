@@ -1,0 +1,212 @@
+/**
+ * Electron Main Process Entry Point
+ *
+ * v2: Uses SessionBridge for direct AgentSession integration.
+ * No more subprocess spawning; the coding agent runs in-process.
+ */
+
+import { BrowserWindow, Menu, app, shell } from "electron";
+import { dirname, join } from "path";
+import { fileURLToPath, pathToFileURL } from "url";
+import { registerIpcHandlers, setupEventForwarding } from "./ipc-handlers.js";
+import { SessionBridge } from "./session-bridge.js";
+import { SettingsStore } from "./settings-store.js";
+import { WorkflowBridge } from "./workflow-engine.js";
+import { registerWorkflowIpcHandlers } from "./workflow-ipc.js";
+import { registerResearchIpcHandlers } from "./research-ipc.js";
+import { ResearchAgentRunner } from "./research-agent-runner.js";
+
+// ESM doesn't have __dirname; derive it from import.meta.url.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+let mainWindow: BrowserWindow | null = null;
+/** Mutable ref that always points to the current active window (survives close/reopen). */
+let activeWin: BrowserWindow | null = null;
+let sessionBridge: SessionBridge | null = null;
+let workflowBridge: WorkflowBridge | null = null;
+let settingsStore: SettingsStore;
+
+function isSafeExternalUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedAppNavigation(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "file:") {
+      return url === pathToFileURL(join(__dirname, "..", "..", "renderer", "index.html")).href;
+    }
+
+    const devServer = process.env.VITE_DEV_SERVER_URL || "http://localhost:5173";
+    if (process.env.NODE_ENV === "development" || process.env.VITE_DEV_SERVER_URL) {
+      return parsed.origin === new URL(devServer).origin;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function openExternalIfSafe(url: string): void {
+  if (isSafeExternalUrl(url)) {
+    void shell.openExternal(url);
+  }
+}
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1000,
+    minHeight: 600,
+    title: "PiX-paper",
+    backgroundColor: "#f0f0f0",
+    frame: false,
+    webPreferences: {
+      preload: join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+    show: false,
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+  });
+
+  // Open external links in default browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfSafe(url);
+    return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (isAllowedAppNavigation(url)) return;
+    event.preventDefault();
+    openExternalIfSafe(url);
+  });
+
+  // Load app
+  if (process.env.NODE_ENV === "development" || process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || "http://localhost:5173");
+    mainWindow.webContents.openDevTools({ mode: "detach" });
+  } else {
+    // __dirname is dist/main/main, renderer build is at dist/renderer/
+    mainWindow.loadFile(join(__dirname, "..", "..", "renderer", "index.html"));
+  }
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+async function cleanup(): Promise<void> {
+  if (workflowBridge) {
+    try {
+      await workflowBridge.dispose();
+    } catch (err) {
+      console.error("[main] Error during workflow bridge cleanup:", err);
+    }
+  }
+  if (sessionBridge) {
+    try {
+      await sessionBridge.dispose();
+    } catch (err) {
+      console.error("[main] Error during session bridge cleanup:", err);
+    }
+  }
+}
+
+app.whenReady().then(() => {
+  // Remove default Electron menu bar (File, Edit, View, Window, Help)
+  Menu.setApplicationMenu(null);
+
+  console.log("[main] app.whenReady() callback executing");
+
+  try {
+    settingsStore = new SettingsStore();
+    console.log("[main] SettingsStore created");
+  } catch (err) {
+    console.error("[main] SettingsStore FAILED:", err);
+    throw err;
+  }
+
+  try {
+    sessionBridge = new SessionBridge();
+    console.log("[main] SessionBridge created");
+  } catch (err) {
+    console.error("[main] SessionBridge FAILED:", err);
+    throw err;
+  }
+
+  createWindow();
+  activeWin = mainWindow;
+  console.log("[main] Window created, activeWin:", !!activeWin);
+
+  if (activeWin) {
+    console.log("[main] registering IPC handlers...");
+    registerIpcHandlers(activeWin, sessionBridge, settingsStore);
+    setupEventForwarding(() => activeWin, sessionBridge);
+
+    // Create research agent runner
+    const researchAgentRunner = new ResearchAgentRunner({
+      projectDir: process.cwd(),
+    });
+
+    // Register workflow IPC handlers
+    workflowBridge = new WorkflowBridge({
+      projectDir: process.cwd(),
+      getWin: () => activeWin,
+      agentRunner: researchAgentRunner,
+    });
+    registerWorkflowIpcHandlers(workflowBridge);
+
+    // Register research IPC handlers
+    registerResearchIpcHandlers(process.cwd());
+
+    console.log("[main] IPC handlers registered (including workflow and research)");
+  }
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      activeWin = mainWindow;
+      if (activeWin && sessionBridge) {
+        // Re-register IPC handlers for the new window (handler guard prevents duplicates)
+        registerIpcHandlers(activeWin, sessionBridge, settingsStore);
+        if (workflowBridge) {
+          registerWorkflowIpcHandlers(workflowBridge);
+        }
+        // Event forwarding is already set up with a getter; updating activeWin is enough.
+      }
+    }
+  });
+});
+
+let quitting = false;
+
+app.on("window-all-closed", () => {
+  // On macOS, the app stays alive in the Dock; keep the session alive
+  // so event forwarding works when the user reopens a window via activate.
+  // On other platforms, quit when all windows close.
+  if (process.platform !== "darwin") {
+    quitting = true;
+    void cleanup().finally(() => app.quit());
+  }
+});
+
+app.on("before-quit", async (event) => {
+  if (!quitting) {
+    event.preventDefault();
+    quitting = true;
+    await cleanup();
+    app.quit();
+  }
+});

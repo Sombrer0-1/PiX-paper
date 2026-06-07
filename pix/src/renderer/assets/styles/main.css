@@ -1,0 +1,239 @@
+/**
+ * PiX Global Styles
+ */
+
+@import "./variables.css";
+
+/* ── Reset ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--pix-font-ui);
+  font-size: var(--pix-text-base);
+  line-height: var(--pix-leading-base);
+  color: var(--pix-text-primary);
+  background: var(--pix-bg-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+}
+
+/* ── Vuetify font override ── */
+.v-application {
+  font-family: var(--pix-font-ui) !important;
+}
+
+/* ── Vuetify border-radius overrides ── */
+:root {
+  --v-border-radius: 6px;
+}
+
+.v-btn {
+  --v-btn-border-radius: 6px;
+}
+
+.v-card {
+  --v-card-border-radius: 8px;
+}
+
+.v-field {
+  --v-field-border-radius: 6px;
+}
+
+.v-sheet {
+  --v-sheet-border-radius: 8px;
+}
+
+.v-application {
+  background: transparent !important;
+}
+
+.v-card,
+.v-list,
+.v-menu .v-overlay__content {
+  color: var(--pix-text-primary);
+}
+
+.v-btn {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.v-field {
+  box-shadow: none;
+}
+
+.v-field__outline {
+  --v-field-border-opacity: 1;
+  color: var(--pix-border-light) !important;
+}
+
+.v-field.v-field--focused .v-field__outline {
+  color: var(--pix-accent) !important;
+}
+
+.v-label,
+.v-messages {
+  color: var(--pix-text-muted) !important;
+}
+
+/* ── Scrollbar styling ── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--pix-border-light);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--pix-border);
+}
+
+/* ── Links ── */
+a {
+  color: var(--pix-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ── Selection ── */
+::selection {
+  background: var(--pix-accent-light);
+  color: var(--pix-text-primary);
+}
+
+/* ── Code ── */
+code {
+  font-family: var(--pix-font-mono);
+  font-size: 0.94em;
+  background: var(--pix-bg-code);
+  padding: 2px 5px;
+  border-radius: var(--pix-radius-xs);
+  color: var(--pix-text-primary);
+}
+
+pre {
+  font-family: var(--pix-font-mono);
+  font-size: var(--pix-text-sm);
+  background: var(--pix-bg-code);
+  border: 1px solid var(--pix-border-light);
+  border-radius: var(--pix-radius-md);
+  padding: var(--pix-space-md);
+  overflow-x: auto;
+  line-height: 1.65;
+  color: var(--pix-text-primary);
+}
+
+pre code {
+  padding: 0;
+  background: none;
+}
+
+/* ── Focus ── */
+:focus-visible {
+  outline: 2px solid var(--pix-accent);
+  outline-offset: 2px;
+}
+
+/* ── Button base ── */
+button {
+  font-family: var(--pix-font-ui);
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-size: var(--pix-text-base);
+  color: var(--pix-text-primary);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ── Input / textarea base ── */
+input,
+textarea {
+  font-family: var(--pix-font-ui);
+  font-size: var(--pix-text-base);
+  color: var(--pix-text-primary);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--pix-text-muted);
+}
+
+/* ── Vuetify overrides ── */
+.v-field__input,
+.v-field {
+  font-family: var(--pix-font-ui) !important;
+}
+
+.v-list-item__title {
+  font-size: var(--pix-text-sm);
+}
+
+.v-divider {
+  border-color: var(--pix-border-light) !important;
+}
+
+/* ── Utility classes ── */
+.responsive-container {
+  width: 100%;
+  height: 100%;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Fade transition ── */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--pix-transition-base);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* ── Spinner animation ── */
+@keyframes pix-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #d9dcf8;
+  border-top-color: var(--pix-accent);
+  border-radius: 50%;
+  animation: pix-spin 0.6s linear infinite;
+}

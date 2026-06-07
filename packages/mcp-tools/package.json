@@ -1,0 +1,46 @@
+{
+	"name": "pp-mcp-tools",
+	"version": "0.1.0",
+	"description": "MCP tools for PiX-paper: search_papers, verify_citation, generate_chart, convert_paper",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsc -p tsconfig.build.json",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.29.0",
+		"pp-research": "file:../research",
+		"typebox": "1.1.38"
+	},
+	"keywords": [
+		"mcp",
+		"tools",
+		"research",
+		"academic"
+	],
+	"author": "PiX-paper Team",
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"devDependencies": {
+		"@types/node": "24.12.4",
+		"typescript": "5.9.3",
+		"vitest": "3.2.4"
+	}
+}
