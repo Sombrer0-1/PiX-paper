@@ -2,6 +2,14 @@
  * Vue Application Entry Point
  */
 
+// Global error handler to catch renderer crashes
+window.addEventListener('error', (event) => {
+  console.error('[GlobalError]', event.message, event.filename, event.lineno, event.colno, event.error);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[UnhandledRejection]', event.reason);
+});
+
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import { createVuetify } from "vuetify";

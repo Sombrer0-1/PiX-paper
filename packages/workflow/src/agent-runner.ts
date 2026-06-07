@@ -36,6 +36,8 @@ export interface AgentRunOptions {
   userPrompt: string;
   /** Working directory */
   cwd: string;
+  /** Node/stage ID (e.g., 'literature', 'method', 'writing') */
+  nodeId?: string;
   /** Abort signal */
   signal?: AbortSignal;
   /** Callback for streaming output */
@@ -67,4 +69,10 @@ export interface AgentRunner {
    * Check if the agent is currently running.
    */
   isRunning(): boolean;
+
+  /**
+   * Update the working directory for subsequent runs.
+   * Optional — not all implementations need this.
+   */
+  setProjectDir?(dir: string): void;
 }

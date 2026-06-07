@@ -174,6 +174,39 @@ export const useWorkflowStore = defineStore('workflow', () => {
     running.value = value;
   }
 
+  // ============================================================================
+  // Actions - Per-Stage Execution (MVP)
+  // ============================================================================
+
+  const stageRunning = ref<string | null>(null);
+  const stageError = ref<string | null>(null);
+  const stageOutput = ref<string>('');
+
+  async function startStage(stageId: string): Promise<{ success: boolean; error?: string }> {
+    stageRunning.value = stageId;
+    stageError.value = null;
+    stageOutput.value = '';
+    running.value = true;
+
+    try {
+      const result = await (window.pixApi as any).stageStart(stageId);
+      if (result.success) {
+        await refreshState();
+        return { success: true };
+      } else {
+        stageError.value = result.error || 'Stage failed';
+        return { success: false, error: result.error };
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      stageError.value = errorMsg;
+      return { success: false, error: errorMsg };
+    } finally {
+      stageRunning.value = null;
+      running.value = false;
+    }
+  }
+
   function clearWorkflow(): void {
     workflowState.value = null;
     artifacts.value = [];
@@ -206,6 +239,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
     running,
     researchTopic,
     selectedTemplate,
+    stageRunning,
+    stageError,
+    stageOutput,
 
     // Getters
     currentNode,
@@ -225,5 +261,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     clearWorkflow,
     setResearchTopic,
     setSelectedTemplate,
+    startStage,
   };
 });

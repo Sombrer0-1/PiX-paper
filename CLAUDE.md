@@ -45,6 +45,8 @@ npm run package                # 打包
 - 提交时 `git add <具体文件>`，禁用 `git add .`
 - 不提交 node_modules、dist、release、*.log
 - `npm install --ignore-scripts`，不运行生命周期脚本
+- 绝对禁止在文档里随意标注虚假的开发进度，误导后续开发
+- 开发任务必须严格遵循list.md 中列出的顺序和内容。每个任务完成后，必须标记完成并确认产物和功能可用，不能跳过或自行扩展任务。整个 MVP 开发只有在 list.md 中所有任务完成后才算完成。
 
 ## 详细设计
 

@@ -74,6 +74,7 @@ export interface PixApi {
   updateProjectConfig: (projectDir: string, updates: Record<string, unknown>) => Promise<{ success: boolean; config?: unknown; error?: string }>;
 
   // Workflow
+  workflowSetProjectDir: (dir: string) => Promise<{ success: boolean; error?: string }>;
   workflowStart: (templateId?: string, topic?: string) => Promise<{ success: boolean; error?: string }>;
   workflowStop: () => Promise<{ success: boolean; error?: string }>;
   workflowPause: () => Promise<{ success: boolean; error?: string }>;
@@ -89,6 +90,7 @@ export interface PixApi {
   workflowBacktrack: (nodeId: string, reason: string) => Promise<{ success: boolean; error?: string }>;
   workflowRegisterArtifact: (params: { nodeId: string; type: string; path: string; metadata?: Record<string, unknown> }) => Promise<{ success: boolean; artifact?: unknown; error?: string }>;
   workflowGetStagePrompt: (nodeId: string) => Promise<string>;
+  stageStart: (stageId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>;
   onWorkflowEvent: (callback: (event: unknown) => void) => () => void;
   onWorkflowApprovalRequest: (callback: (request: unknown) => void) => () => void;
   onWorkflowStagePrompt: (callback: (data: unknown) => void) => () => void;
@@ -200,6 +202,7 @@ const api: PixApi = {
     ipcRenderer.invoke("update-project-config", projectDir, updates),
 
   // Workflow
+  workflowSetProjectDir: (dir: string) => ipcRenderer.invoke("workflow-set-project-dir", dir),
   workflowStart: (templateId?: string, topic?: string) => ipcRenderer.invoke("workflow-start", templateId, topic),
   workflowStop: () => ipcRenderer.invoke("workflow-stop"),
   workflowPause: () => ipcRenderer.invoke("workflow-pause"),
@@ -215,6 +218,7 @@ const api: PixApi = {
   workflowBacktrack: (nodeId: string, reason: string) => ipcRenderer.invoke("workflow-backtrack", nodeId, reason),
   workflowRegisterArtifact: (params: { nodeId: string; type: string; path: string; metadata?: Record<string, unknown> }) => ipcRenderer.invoke("workflow-register-artifact", params),
   workflowGetStagePrompt: (nodeId: string) => ipcRenderer.invoke("workflow-get-stage-prompt", nodeId),
+  stageStart: (stageId: string) => ipcRenderer.invoke("stage-start", stageId),
   onWorkflowEvent: (callback: (event: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data);
     ipcRenderer.on("workflow-event", handler);

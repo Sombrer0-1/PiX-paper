@@ -1,8 +1,16 @@
 # PiX-paper 设计文档
 
+> **开发状态：MVP 阶段**。当前目标为完整闭环可跑通，部分复杂功能（DAG 回跳、完整质量门禁、Artifact 溯源）在后续版本实现。
+
 ## 1. 定位
 
 PiX-paper 是一个 AI 驱动的科研论文产出系统。用户输入研究主题后，系统自动完成文献调研、方法构思、代码复现、实验尝试、结果分析和论文撰写；用户主要在关键节点进行确认、选择和修正，以保证科研质量与方向正确。
+
+### MVP 与全功能的区分
+
+- **MVP 目标**：完整闭环可跑通，阶段产物可查看，人工确认点可用
+- **MVP 范围**：线性 Stage 执行 + 人工确认 + 轻量产物登记
+- **后续版本**：完整 DAG 回跳/分支、复杂质量门禁、Artifact 溯源链
 
 ### 核心原则
 
@@ -150,7 +158,9 @@ pix/src/
 
 ### 3.1 Artifact（核心抽象）
 
-所有阶段输出都登记为 Artifact，支持溯源、恢复、审计。
+> **MVP 说明**：前期版本 Artifact 仅用于阶段产物登记和 UI 显示，hash/provenance 字段预留但不强制实现。
+
+所有阶段输出都登记为 Artifact。
 
 ```typescript
 interface Artifact {
@@ -160,9 +170,9 @@ interface Artifact {
   path: string;                    // 文件路径
   createdBy: 'user' | 'agent' | 'tool';
   sourceNodeId: string;            // 产出该 Artifact 的工作流节点
-  hash: string;                    // 内容哈希
+  hash?: string;                   // 内容哈希（MVP 可选）
   metadata: Record<string, unknown>;
-  provenance: Provenance[];        // 来源追溯链
+  provenance?: Provenance[];       // 来源追溯链（MVP 可选）
   createdAt: number;
 }
 
@@ -256,11 +266,11 @@ interface Section {
 
 ---
 
-## 4. 工作流设计（DAG）
+## 4. 工作流设计
 
-### 4.1 DAG 架构
+### 4.1 工作流架构
 
-工作流是有向图（DAG），不是线性流程。支持回跳、分支、重试。
+> **MVP 说明**：DAG 工作流为目标架构。MVP 阶段采用线性 Stage 执行，每阶段提供人工确认和重跑机制；后续版本实现完整 DAG 回跳和分支。
 
 ```
                     ┌─────────────┐
@@ -422,7 +432,9 @@ interface WorkflowTransition {
 
 ### 4.4 质量门禁
 
-每个阶段完成时必须通过质量检查：
+> **MVP 说明**：前期版本 QualityGate 仅检查关键文件是否存在、阶段产物是否生成，后续版本扩展为详细审计。
+
+每个阶段完成时进行质量检查：
 
 ```typescript
 interface QualityGate {
@@ -522,7 +534,15 @@ LLM 通过内置工具（bash/read/write）自主完成：
 
 ## 6. UI 设计
 
-### 6.1 布局
+### 6.0 MVP 最小可用界面
+
+MVP UI 范围：
+- **HomePage**：项目列表、创建新项目
+- **ProjectPage**：当前阶段进度、对话区、确认按钮
+- **右侧边栏**：当前阶段产物列表（ArtifactList）
+- 其他面板（QualityGatePanel、LibraryPanel 等）延后实现
+
+### 6.1 完整布局（目标）
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -609,51 +629,7 @@ projects/
         └── references.json           # 参考文献
 ```
 
----
 
-## 9. 开发路线
-
-### Phase 1: 基础框架（2 周）
-
-- [x] 新增 `packages/workflow` 和 `packages/research`
-- [x] DAG 工作流引擎基础实现
-- [x] Artifact 管理器
-- [x] 工具注册机制
-- [x] 基础 UI 框架
-
-### Phase 2: 文献工具（2 周）
-
-- [x] Semantic Scholar / arXiv API 集成
-- [x] 论文检索、下载、PDF 解析
-- [x] 去重、排序、引用验证
-- [x] 文献库管理 UI
-
-### Phase 3: Harness 核心（2 周）
-
-- [x] 工作流引擎与 Agent 集成
-- [x] 阶段状态管理
-- [x] 人工确认点实现
-- [x] Artifact 追踪
-
-### Phase 4: MCP 工具（1 周）
-
-- [x] search_papers MCP Server
-- [x] verify_claim_citation MCP Server
-- [x] generate_chart MCP Server
-- [x] convert_paper MCP Server
-
-### Phase 5: Prompt 设计（2 周）
-
-- [x] 各阶段 System Prompt
-- [x] 质量检查 Prompt
-- [x] 论文写作 Prompt
-- [x] 输出格式规范
-
-### Phase 6: 集成测试（1 周）
-
-- [ ] 端到端测试
-- [ ] 质量门禁验证
-- [ ] 文档完善
 
 ---
 

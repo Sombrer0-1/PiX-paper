@@ -5,14 +5,10 @@
 import { ref, onMounted, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useProjectStore } from "../stores/project-store";
-import { useSessionStore } from "../stores/session-store";
-import { useRpc } from "../composables/useRpc";
 import type { ProjectInfo } from "@/types/session";
 
 const router = useRouter();
 const projectStore = useProjectStore();
-const sessionStore = useSessionStore();
-const rpc = useRpc();
 
 // Error snackbar
 const showError = ref(false);
@@ -32,28 +28,28 @@ function showErrorMessage(msg: string): void {
 async function startResearch(): Promise<void> {
   const dirPath = await window.pixApi.selectProject();
   if (!dirPath) return;
-  if (await rpc.startPi(dirPath)) {
-    // Get project config name from session state (loaded from .pp)
-    const configName = rpc.sessionState.value?.projectConfig?.name;
+  try {
+    // Set the workflow engine's project directory (no Pi startPi needed)
+    await window.pixApi.workflowSetProjectDir(dirPath);
+    // Read project config from .pp if it exists
+    const configResult = await window.pixApi.getProjectConfig(dirPath);
+    const configName = (configResult?.config as Record<string, unknown>)?.name as string | undefined;
     await projectStore.openProject(dirPath, configName);
-    sessionStore.clearSession();
-    await projectStore.listSessions();
     router.push("/research");
-  } else {
-    showErrorMessage(`启动失败: ${rpc.lastError.value || "未知错误"}`);
+  } catch (err) {
+    showErrorMessage(`打开项目失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
 async function openRecentProject(project: ProjectInfo): Promise<void> {
-  if (await rpc.startPi(project.path)) {
-    // Get project config name from session state (loaded from .pp)
-    const configName = rpc.sessionState.value?.projectConfig?.name;
+  try {
+    await window.pixApi.workflowSetProjectDir(project.path);
+    const configResult = await window.pixApi.getProjectConfig(project.path);
+    const configName = (configResult?.config as Record<string, unknown>)?.name as string | undefined;
     await projectStore.openProject(project.path, configName);
-    sessionStore.clearSession();
-    await projectStore.listSessions();
     router.push("/research");
-  } else {
-    showErrorMessage(`启动失败: ${rpc.lastError.value || "未知错误"}`);
+  } catch (err) {
+    showErrorMessage(`打开项目失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

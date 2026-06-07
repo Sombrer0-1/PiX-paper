@@ -534,6 +534,55 @@ Reads from a JSON manuscript file or Markdown file, and outputs the specified fo
 /**
  * Get all research tools for a project.
  */
+/**
+ * Tool: write_file
+ *
+ * Write content to a file in the project directory.
+ * This is essential for the agent to produce stage outputs.
+ */
+export function createWriteFileTool(ctx: ResearchToolContext) {
+  return {
+    name: 'write_file',
+    description: `Write content to a file in the project directory.
+Use this to create output files like survey.md, method.md, paper.md, etc.
+The path is relative to the project directory.`,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        path: {
+          type: 'string',
+          description: 'File path relative to project directory (e.g., "literature/survey.md")',
+        },
+        content: {
+          type: 'string',
+          description: 'Content to write to the file',
+        },
+      },
+      required: ['path', 'content'],
+    },
+    async execute(args: { path: string; content: string }) {
+      const { writeFileSync, mkdirSync, existsSync } = await import('fs');
+      const { join, dirname } = await import('path');
+
+      const fullPath = join(ctx.projectDir, args.path);
+      const dir = dirname(fullPath);
+
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+
+      writeFileSync(fullPath, args.content, 'utf-8');
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Successfully wrote ${args.content.length} bytes to ${args.path}`,
+        }],
+      };
+    },
+  };
+}
+
 export function createResearchTools(projectDir: string) {
   const ctx = createResearchToolContext(projectDir);
 
@@ -547,6 +596,7 @@ export function createResearchTools(projectDir: string) {
       createVerifyCitationTool(ctx),
       createGenerateChartTool(ctx),
       createConvertPaperTool(ctx),
+      createWriteFileTool(ctx),
     ],
   };
 }

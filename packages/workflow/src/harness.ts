@@ -33,6 +33,25 @@ export interface StagePrompt {
   qualityChecks: string[];
 }
 
+/**
+ * Expected output files for each stage type.
+ * Stage completion requires these files to exist in the project directory.
+ */
+export const STAGE_EXPECTED_OUTPUTS: Record<string, string[]> = {
+  literature: [
+    'literature/literature_pool.json',
+    'literature/survey.md',
+  ],
+  method: [
+    'method/method.md',
+    'method/experiment_config.json',
+  ],
+  writing: [
+    'paper/paper.md',
+    'paper/manuscript.json',
+  ],
+};
+
 export const STAGE_PROMPTS: Record<string, StagePrompt> = {
   literature: {
     systemPrompt: `You are a research assistant conducting a literature survey.
@@ -43,10 +62,12 @@ Your goal is to find relevant papers, analyze them, and identify research gaps.`
 3. Identify key findings, methods, and limitations
 4. Synthesize a literature review
 5. Identify research gaps and opportunities`,
-    outputInstructions: `Output your findings as:
-- literature_pool.json: Structured list of papers with metadata
-- survey.md: Literature review document
-- gaps.md: Identified research gaps`,
+    outputInstructions: `You MUST create these files using the write_file tool:
+- write_file("literature/literature_pool.json", ...) — Structured list of papers with metadata
+- write_file("literature/survey.md", ...) — Literature review document
+- write_file("literature/gaps.md", ...) — Identified research gaps
+
+IMPORTANT: You MUST call write_file for each output file. Do NOT just output text — the files must exist on disk.`,
     qualityChecks: [
       'At least 10 relevant papers found',
       'Each paper has abstract, year, source, URL',
@@ -63,10 +84,12 @@ Your goal is to design a novel method based on the literature survey findings.`,
 3. Propose a novel method/approach
 4. Define evaluation metrics
 5. Plan experiments to validate the method`,
-    outputInstructions: `Output your design as:
-- method.md: Detailed method description
-- research_question.md: Clear research question
-- experiment_plan.md: Experiment design`,
+    outputInstructions: `You MUST create these files using the write_file tool:
+- write_file("method/method.md", ...) — Detailed method description
+- write_file("method/research_question.md", ...) — Clear research question
+- write_file("method/experiment_plan.md", ...) — Experiment design
+
+IMPORTANT: You MUST call write_file for each output file. Do NOT just output text — the files must exist on disk.`,
     qualityChecks: [
       'Clear research question defined',
       'Novel contribution identified',
@@ -129,10 +152,12 @@ Your goal is to write a complete research paper based on the conducted research.
    - Conclusion
 3. Add citations and references
 4. Insert figures and tables`,
-    outputInstructions: `Output your paper as:
-- paper.md: Complete paper in Markdown
-- references.json: Bibliography
-- figures/: Paper figures`,
+    outputInstructions: `You MUST create these files using the write_file tool:
+- write_file("paper/paper.md", ...) — Complete paper in Markdown
+- write_file("paper/references.json", ...) — Bibliography
+- write_file("paper/manuscript.json", ...) — Paper metadata
+
+IMPORTANT: You MUST call write_file for each output file. Do NOT just output text — the files must exist on disk.`,
     qualityChecks: [
       'All sections complete',
       'Claims supported by citations',
@@ -160,6 +185,18 @@ Your goal is to review the entire research process and ensure quality.`,
     ],
   },
 };
+
+// ============================================================================
+// Stage Result
+// ============================================================================
+
+export interface StageResult {
+  success: boolean;
+  nodeId: string;
+  artifacts: Artifact[];
+  output: string;
+  error?: string;
+}
 
 // ============================================================================
 // Harness Options
@@ -348,7 +385,8 @@ export class ResearchHarness extends EventEmitter {
   // Stage Execution
   // ============================================================================
 
-  private async executeStageTasks(node: WorkflowNode, prompt: StagePrompt): Promise<void> {
+  private async executeStageTasks(node: WorkflowNode, prompt: StagePrompt): Promise<string> {
+    console.log(`[Harness.executeStageTasks] nodeId=${node.id}, nodeType=${node.type}, hasAgentRunner=${!!this.options.agentRunner}, projectDir=${this.options.projectDir}`);
     // Create task for LLM execution
     const task: Task = {
       id: `task-${Date.now()}`,
@@ -379,6 +417,7 @@ export class ResearchHarness extends EventEmitter {
           systemPrompt: prompt.systemPrompt,
           userPrompt: fullPrompt,
           cwd: this.options.projectDir,
+          nodeId: node.id,
           onOutput: (text) => {
             this.options.onAgentOutput?.(node.id, text);
             this.emit('agent_output', { nodeId: node.id, text });
@@ -392,7 +431,7 @@ export class ResearchHarness extends EventEmitter {
         // Register any files the agent wrote as artifacts
         if (result.filesWritten.length > 0) {
           for (const file of result.filesWritten) {
-            this.registerArtifact({
+            await this.registerArtifact({
               nodeId: node.id,
               type: this.inferArtifactType(file.path, node.type),
               path: file.path,
@@ -406,6 +445,7 @@ export class ResearchHarness extends EventEmitter {
         await this.workflowEngine.updateTaskStatus(node.id, task.id, 'completed', result.output);
 
         this.log(`Agent completed stage "${node.name}" — ${result.filesWritten.length} files written`);
+        return result.output;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         await this.workflowEngine.updateTaskStatus(node.id, task.id, 'failed', undefined, errorMsg);
@@ -414,6 +454,7 @@ export class ResearchHarness extends EventEmitter {
     } else {
       // No agent runner — mark task as completed (development/testing mode)
       await this.workflowEngine.updateTaskStatus(node.id, task.id, 'completed');
+      return '';
     }
   }
 
@@ -443,7 +484,8 @@ ${prompt.qualityChecks.map(c => `- ${c}`).join('\n')}
 ## Important
 
 - Write all output files to the project directory: ${this.options.projectDir}
-- Use the available tools (search_papers, add_to_library, etc.) when needed
+- Use the available tools when needed: search_papers, add_to_library, list_library, get_paper_details, verify_citation, generate_chart, convert_paper, write_file
+- MUST use write_file to create all output files — this is the only way to produce stage outputs
 - After completing your work, summarize what you produced
 `;
   }
@@ -516,13 +558,13 @@ ${prompt.qualityChecks.map(c => `- ${c}`).join('\n')}
   // Artifact Registration
   // ============================================================================
 
-  registerArtifact(params: {
+  async registerArtifact(params: {
     nodeId: string;
     type: ArtifactType;
     path: string;
     metadata?: Record<string, unknown>;
-  }): Artifact {
-    const artifact = this.artifactManager.create({
+  }): Promise<Artifact> {
+    const artifact = await this.artifactManager.create({
       projectId: this.options.projectDir,
       type: params.type,
       path: params.path,
@@ -532,11 +574,11 @@ ${prompt.qualityChecks.map(c => `- ${c}`).join('\n')}
     });
 
     // Add to workflow node
-    this.workflowEngine.addArtifact(params.nodeId, {
+    await this.workflowEngine.addArtifact(params.nodeId, {
       id: artifact.id,
       type: artifact.type,
       path: artifact.path,
-      description: artifact.metadata.description as string || '',
+      description: (artifact.metadata.description as string) || '',
     });
 
     this.log(`Registered artifact: ${artifact.type} at ${artifact.path}`);
@@ -565,6 +607,113 @@ ${prompt.qualityChecks.map(c => `- ${c}`).join('\n')}
     }
 
     return undefined;
+  }
+
+  /**
+   * Run a single stage and return the result.
+   * Unlike start() which runs all stages sequentially, this runs exactly one stage.
+   */
+  async runStage(nodeId: string): Promise<StageResult> {
+    console.log(`[Harness.runStage] nodeId=${nodeId}, time=${new Date().toISOString()}`);
+    const node = this.workflowEngine.getNode(nodeId);
+    if (!node) {
+      console.error(`[Harness.runStage] Node not found: ${nodeId}`);
+      return { success: false, nodeId, error: `Node not found: ${nodeId}`, artifacts: [], output: '' };
+    }
+
+    // Check dependencies
+    const unmetDeps = node.dependencies.filter(depId => {
+      const dep = this.workflowEngine.getNode(depId);
+      return !dep || dep.status !== 'completed';
+    });
+    if (unmetDeps.length > 0) {
+      return { success: false, nodeId, error: `Unmet dependencies: ${unmetDeps.join(', ')}`, artifacts: [], output: '' };
+    }
+
+    this.running = true;
+    this.log(`Running single stage: ${node.name}`);
+    this.options.onStageStart?.(nodeId);
+
+    // Start node
+    await this.workflowEngine.startNode(nodeId);
+
+    // Get stage prompt
+    const prompt = STAGE_PROMPTS[node.type];
+    if (!prompt) {
+      const error = `No prompt template for stage: ${node.type}`;
+      await this.workflowEngine.failNode(nodeId, error);
+      return { success: false, nodeId, error, artifacts: [], output: '' };
+    }
+
+    // Execute stage tasks
+    let agentOutput = '';
+    try {
+      agentOutput = await this.executeStageTasks(node, prompt);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      await this.workflowEngine.failNode(nodeId, errorMsg);
+      return { success: false, nodeId, error: errorMsg, artifacts: this.artifactManager.getByNode(nodeId), output: agentOutput };
+    }
+
+    // Check expected outputs (MVP: file existence check)
+    const expectedOutputs = STAGE_EXPECTED_OUTPUTS[node.type];
+    if (expectedOutputs && expectedOutputs.length > 0) {
+      const { existsSync } = await import('fs');
+      const { join } = await import('path');
+      const missingFiles: string[] = [];
+
+      for (const file of expectedOutputs) {
+        const filePath = join(this.options.projectDir, file);
+        if (!existsSync(filePath)) {
+          missingFiles.push(file);
+        }
+      }
+
+      if (missingFiles.length > 0) {
+        const error = `Missing expected outputs: ${missingFiles.join(', ')}`;
+        console.error(`[Harness.runStage] ${error}`);
+        await this.workflowEngine.failNode(nodeId, error);
+        return { success: false, nodeId, error, artifacts: this.artifactManager.getByNode(nodeId), output: agentOutput };
+      }
+
+      // Register expected output files as artifacts
+      for (const file of expectedOutputs) {
+        const filePath = join(this.options.projectDir, file);
+        await this.registerArtifact({
+          nodeId: node.id,
+          type: this.inferArtifactType(file, node.type),
+          path: filePath,
+          metadata: { expectedOutput: true },
+        });
+      }
+    }
+
+    // Run quality gate (MVP: just check files exist)
+    if (node.qualityGate) {
+      const gateResult = await this.runQualityGate(node);
+      this.options.onQualityGate?.(nodeId, gateResult);
+
+      if (gateResult.status === 'failed') {
+        const error = `Quality gate failed: ${gateResult.checks.filter(c => c.status === 'failed').map(c => c.name).join(', ')}`;
+        await this.workflowEngine.failNode(nodeId, error);
+        return { success: false, nodeId, error, artifacts: this.artifactManager.getByNode(nodeId), output: agentOutput };
+      }
+    }
+
+    // Complete node
+    await this.workflowEngine.completeNode(nodeId);
+    const artifacts = this.artifactManager.getByNode(nodeId);
+    this.options.onStageComplete?.(nodeId, artifacts);
+
+    this.running = false;
+    this.log(`Completed single stage: ${node.name}`);
+
+    return {
+      success: true,
+      nodeId,
+      artifacts,
+      output: agentOutput,
+    };
   }
 
   async backtrack(nodeId: string, reason: string): Promise<void> {

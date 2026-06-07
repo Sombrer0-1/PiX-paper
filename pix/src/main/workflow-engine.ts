@@ -12,6 +12,7 @@ import {
   createDefaultResearchWorkflow,
   createQuickSurveyWorkflow,
   createExperimentOnlyWorkflow,
+  createMvpResearchWorkflow,
   type WorkflowState,
   type WorkflowNode,
   type WorkflowConfig,
@@ -23,6 +24,7 @@ import {
   type WorkflowEvent,
   type AgentRunner,
   type AgentResult,
+  type StageResult,
 } from 'pp-workflow';
 import { initResearchProject } from './project-init.js';
 import type { BrowserWindow } from 'electron';
@@ -41,6 +43,17 @@ export class WorkflowBridge {
 
   constructor(options: WorkflowBridgeOptions) {
     this.options = options;
+  }
+
+  /**
+   * Update the project directory. Must be called before startWorkflow
+   * when the user selects a different project directory.
+   */
+  setProjectDir(dir: string): void {
+    this.options.projectDir = dir;
+    if (this.options.agentRunner?.setProjectDir) {
+      this.options.agentRunner.setProjectDir(dir);
+    }
   }
 
   // =========================================================================
@@ -156,6 +169,19 @@ export class WorkflowBridge {
     await this.harness.resume();
   }
 
+  /**
+   * Run a single stage. Ensures the harness is initialized first.
+   */
+  async runStage(stageId: string): Promise<StageResult> {
+    console.log(`[WorkflowBridge.runStage] stageId=${stageId}, time=${new Date().toISOString()}`);
+    if (!this.harness) {
+      throw new Error('No active workflow — call startWorkflow first');
+    }
+    const result = await this.harness.runStage(stageId);
+    console.log(`[WorkflowBridge.runStage] stageId=${stageId}, success=${result.success}, output=${result.output.substring(0, 100)}...`);
+    return result;
+  }
+
   async registerArtifact(params: {
     nodeId: string;
     type: ArtifactType;
@@ -189,6 +215,8 @@ export class WorkflowBridge {
         return createQuickSurveyWorkflow();
       case 'experiment-only':
         return createExperimentOnlyWorkflow();
+      case 'mvp':
+        return createMvpResearchWorkflow();
       default:
         return createDefaultResearchWorkflow();
     }

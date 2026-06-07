@@ -288,3 +288,56 @@ export function createExperimentOnlyWorkflow(): WorkflowConfig {
     nodes,
   };
 }
+
+// ============================================================================
+// MVP Workflow (literature → method → writing)
+// ============================================================================
+
+export function createMvpResearchWorkflow(): WorkflowConfig {
+  const nodes: WorkflowNodeConfig[] = [
+    {
+      id: 'literature',
+      type: 'literature',
+      name: 'Literature Survey',
+      description: 'Search, filter, and analyze related papers',
+      dependencies: [],
+      approvalRequired: false,
+      qualityGateChecks: [],
+      retryPolicy: {
+        maxRetries: 2,
+        backoffMs: 5000,
+        retryOnFailure: true,
+      },
+    },
+    {
+      id: 'method',
+      type: 'method',
+      name: 'Method Design',
+      description: 'Design novel method based on literature analysis',
+      dependencies: ['literature'],
+      approvalRequired: false,
+      qualityGateChecks: [],
+      retryPolicy: {
+        maxRetries: 3,
+        backoffMs: 5000,
+        retryOnFailure: true,
+      },
+    },
+    {
+      id: 'writing',
+      type: 'writing',
+      name: 'Paper Writing',
+      description: 'Write the research paper',
+      dependencies: ['method'],
+      approvalRequired: false,
+      qualityGateChecks: [],
+    },
+  ];
+
+  return {
+    id: 'mvp-research',
+    name: 'MVP Research Workflow',
+    description: 'Minimal workflow: literature → method → writing',
+    nodes,
+  };
+}

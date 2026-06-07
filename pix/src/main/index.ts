@@ -20,6 +20,13 @@ import { ResearchAgentRunner } from "./research-agent-runner.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Disable hardware acceleration to avoid GPU process crashes on some systems
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('disable-gpu');
+app.commandLine.appendSwitch('disable-software-rasterizer');
+app.commandLine.appendSwitch('disable-gpu-compositing');
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+
 let mainWindow: BrowserWindow | null = null;
 /** Mutable ref that always points to the current active window (survives close/reopen). */
 let activeWin: BrowserWindow | null = null;
@@ -72,7 +79,7 @@ function createWindow(): void {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
     show: false,
   });
@@ -91,6 +98,18 @@ function createWindow(): void {
     if (isAllowedAppNavigation(url)) return;
     event.preventDefault();
     openExternalIfSafe(url);
+  });
+
+  // Handle renderer process crashes
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[main] Renderer process gone:", details.reason);
+    // Reload the window after a short delay
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log("[main] Reloading renderer...");
+        mainWindow.reload();
+      }
+    }, 1000);
   });
 
   // Load app

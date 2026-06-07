@@ -17,6 +17,15 @@ export function registerWorkflowIpcHandlers(workflowBridge: WorkflowBridge): voi
   // Workflow Lifecycle
   // =========================================================================
 
+  ipcMain.handle('workflow-set-project-dir', (_event, dir: string) => {
+    try {
+      workflowBridge.setProjectDir(dir);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
   ipcMain.handle('workflow-start', async (_event, templateId?: string, topic?: string) => {
     try {
       await workflowBridge.startWorkflow(templateId || 'default', topic);
@@ -135,6 +144,22 @@ export function registerWorkflowIpcHandlers(workflowBridge: WorkflowBridge): voi
       return workflowBridge.generateStagePrompt(nodeId);
     } catch (err) {
       return '';
+    }
+  });
+
+  // =========================================================================
+  // Per-Stage Execution (MVP)
+  // =========================================================================
+
+  ipcMain.handle('stage-start', async (_event, stageId: string) => {
+    console.log(`[ipc:stage-start] stageId=${stageId}, time=${new Date().toISOString()}`);
+    try {
+      const result = await workflowBridge.runStage(stageId);
+      console.log(`[ipc:stage-start] stageId=${stageId}, success=${result.success}, artifacts=${result.artifacts.length}`);
+      return { success: true, result };
+    } catch (err) {
+      console.error(`[ipc:stage-start] stageId=${stageId}, error:`, err);
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   });
 }
