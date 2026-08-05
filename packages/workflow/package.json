@@ -1,0 +1,30 @@
+{
+	"name": "pi-paper-workflow",
+	"version": "0.1.0",
+	"description": "Lightweight stage orchestration primitives for PiX paper projects (stage state machine, artifact registry, stage prompts)",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json"
+	},
+	"devDependencies": {
+		"@types/node": "24.12.4",
+		"shx": "0.4.0",
+		"typescript": "5.9.3"
+	},
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}
