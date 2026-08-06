@@ -2,7 +2,7 @@
 
 > **开发状态:PiX-paper MVP 核心主流程已实现,当前处于联调与验收阶段。** 本文档基于 PiX 现有代码(已完整集成 pi-coding-agent via `createAgentSession`)演进而非另起炉灶。实现状态以 `pix/src` 与 `packages/` 当前代码为准。
 >
-> **同步日期:2026-07-21。** 阶段状态机、五阶段提示词、paper MCP、项目骨架、gate 控制流和 paper 工作台已落地;PiX-paper 已确定为基于 PiX 的独立产品并切换为严格 paper-only(移除通用 coding 入口,非 paper 目录拒绝启动)。剩余项主要是长任务暂停/恢复、内置产物预览和跨路由澄清保留等体验增强。
+> **同步日期:2026-08-06。** 阶段状态机、五阶段提示词、paper MCP、项目骨架、gate 控制流和 paper 工作台已落地;PiX-paper 已确定为基于 PiX 的独立产品并切换为严格 paper-only(移除通用 coding 入口,非 paper 目录拒绝启动)。paper 工作台已从早期的"三栏 + GateCard"演化为多视图研究台(PaperWorkspace),产物支持应用内预览与修订快照,阶段支持暂停/恢复,并新增收件箱(.pp/inbox.json)集中沉淀 gate/澄清/错误/验证等待事项。剩余项主要是历史 session 阶段标签、可执行 token 预算字段和 ETA/活动摘要等体验增强。
 
 ## 1. 定位
 
@@ -26,7 +26,7 @@ PiX-paper 是基于 PiX 的独立产品,与 PiX(coding)分离。一个 paper 就
 | pi-ai(多模型 LLM) | 完全复用 |
 | pi-coding-agent(AgentSession / 工具 / session / settings) | 完全复用 |
 | pi-mcp-adapter | 完全复用,注册 paper MCP server |
-| 渲染层(三栏布局、SessionView、ClarificationCard、SessionTreeView、RightPanel) | 完全复用,新增 paper 专属组件 |
+| 渲染层(SessionView、ClarificationCard、SessionTreeView、RightPanel) | 复用;paper 模式套独立 `PaperWorkspace` 外壳,上述组件在 drawer/抽屉中复用 |
 | **stage 编排器 + 阶段提示词** | **paper 专属,已实现** |
 | **paper MCP 工具**(检索/PDF 解析等) | **paper 专属,已实现** |
 
@@ -95,10 +95,13 @@ PiX-paper 是基于 PiX 的独立产品,与 PiX(coding)分离。一个 paper 就
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                    UI(复用 PiX + paper 组件)                    │
-│  左栏(复用):项目 + 会话列表                                     │
-│  中栏:阶段进度条(新) + 对话(复用 SessionView) + gate(GateCard)             │
-│  右栏(复用 + 新增):会话信息/goal/token/MCP/后台任务 + 阶段产物卡(新) │
+│              UI(PaperWorkspace 多视图研究台)                     │
+│  顶栏:阶段/状态/模型选择/收件箱/Agent 日志/运行状态/设置          │
+│  左栏(PaperNavigation):概览/五阶段/审核/产物分组/收件箱          │
+│  中栏(路由视图):dashboard/stage/gate/library/figures/results/     │
+│                  manuscript/artifact/inbox                       │
+│  右栏(PaperInspector):项目状态/当前阶段/运行成本/产物/活动       │
+│  抽屉:AgentLogDrawer(对话+澄清+composer)/PaperRuntimePanel      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -134,18 +137,21 @@ pix/src/
 │
 ├── renderer/
 │   ├── components/
-│   │   ├── paper/              # 新增:阶段进度、产物卡、gate 卡
-│   │   ├── layout/             # 复用
+│   │   ├── paper/              # 新增:PaperWorkspace 多视图研究台
+│   │   │                       # StageDashboard/StageWorkspace/GateReviewWorkspace
+│   │   │                       # ArtifactCatalogView/ManuscriptView/PaperArtifactView/ArtifactPreview
+│   │   │                       # InboxView/PaperNavigation/PaperInspector/PaperRuntimePanel/AgentLogDrawer
+│   │   ├── layout/             # 复用(AppLayout 三栏,非 paper 兜底)
 │   │   ├── session/            # 复用
-│   │   ├── input/              # 复用(ClarificationCard 等)
+│   │   ├── input/              # 复用(ClarificationCard/Chip、ModelSelector 等)
 │   │   └── ...
 │   ├── stores/
-│   │   ├── paper-store.ts      # 新增:paper 状态(阶段/产物/gate)
+│   │   ├── paper-store.ts      # 新增:paper 状态(阶段/产物/gate/inbox/UI 视图/草稿)
 │   │   ├── session-store.ts    # 复用
 │   │   └── ...
 │   └── pages/
 │       ├── HomePage.vue        # 复用,加"创建 Paper 项目" + "打开 Paper 项目"(校验 .pp/)
-│       ├── WorkspacePage.vue   # 复用,集成阶段进度 + gate
+│       ├── WorkspacePage.vue   # 复用,paper 模式渲染 PaperWorkspace,否则 AppLayout
 │       └── SettingsPage.vue    # 复用
 │
 └── shared/
@@ -156,21 +162,44 @@ pix/src/
 
 ## 3. 核心数据模型
 
-### 3.1 Artifact(MVP 轻量)
+### 3.1 Artifact + ArtifactRevision
 
-所有阶段输出登记为 Artifact。MVP 仅记录路径/类型/阶段/时间,`hash` / `provenance` 预留字段后置 v2。
+所有阶段输出登记为 Artifact。每次声明产物时追加一条不可变 ArtifactRevision,记录路径、sha256、字节大小、mime 类型,并在 `.pp/snapshots/<artifactId>/r<revision><ext>` 保存一份不可变快照,用于 gate 审核时的版本对比。
 
 ```typescript
 interface Artifact {
   id: string;
   projectId: string;
   type: ArtifactType;
-  path: string;                 // 文件路径
+  path: string;                 // 项目相对路径
   stage: StageId;               // 产出阶段
   createdBy: 'user' | 'agent' | 'tool';
   createdAt: number;
-  metadata?: Record<string, unknown>;
-  // v2: hash?: string; provenance?: Provenance[];
+  role?: 'primary' | 'supporting';
+  latestRevisionId?: string;    // 指向最新修订
+  relations?: ArtifactRelation[];
+  metadata?: Record<string, unknown>;  // citationKey/caption/config/seed/metric 等
+}
+
+interface ArtifactRevision {
+  id: string;
+  artifactId: string;
+  revision: number;
+  path: string;
+  createdAt: number;
+  hash?: string;                // sha256
+  byteSize?: number;
+  mimeType?: string;
+  snapshotPath?: string;        // .pp/snapshots/<artifactId>/r<revision><ext>
+  available: boolean;
+  error?: string;
+}
+
+interface ArtifactRelation {
+  kind: 'cites' | 'illustrates' | 'derived_from' | 'supports';
+  targetArtifactId?: string;
+  targetPath?: string;
+  label?: string;
 }
 
 type ArtifactType =
@@ -186,16 +215,29 @@ type ArtifactType =
   | 'literature_pool';
 ```
 
-### 3.2 PaperProject + StageProgress
+> `provenance`(跨产物溯源链)仍后置 v2;当前用 `relations` 表达产物间引用关系(cites/illustrates/derived_from/supports)。
+
+### 3.2 PaperProjectConfig + PaperProgress
+
+项目元数据与进度分文件存放:`.pp/config.json` 存 `PaperProjectConfig`,`.pp/progress.json` 存 `PaperProgress`。
 
 ```typescript
-interface PaperProject {
+interface PaperProjectConfig {
   id: string;
   name: string;
   topic: string;                 // 研究主题
-  projectDir: string;            // PiX project 目录(cwd)
   createdAt: number;
-  stage: StageProgress;
+}
+
+interface PaperProgress {
+  version: 2;
+  stage: StageProgress;          // 阶段状态机
+  artifacts: Artifact[];         // 全局产物注册表
+  artifactRevisions: ArtifactRevision[];  // 修订快照
+  stageRuns: StageRun[];         // 每次阶段运行的记录(含 token/成本)
+  activities: StageActivity[];   // 阶段活动流水(最近 200 条)
+  pendingGate?: GateRequest;     // 持久化的在途 gate,重启后恢复
+  updatedAt: number;
 }
 
 interface StageProgress {
@@ -204,19 +246,96 @@ interface StageProgress {
 }
 
 interface StageState {
-  status: 'pending' | 'running' | 'awaiting_gate' | 'passed' | 'failed' | 'rework';
+  status: StageStatus;
   artifacts: string[];           // 产出 artifact id 列表
   sessionFile?: string;          // 该阶段对应的 pi session 文件(支持 fork 分支)
   gateDecision?: 'rework' | 'continue' | 'abort';
   reworkTarget?: StageId;        // 返工目标阶段
+  runId?: string;                // 当前 StageRun id
   startedAt?: number;
   finishedAt?: number;
+  pausedAt?: number;
+  lastActivityAt?: number;
 }
+
+type StageStatus =
+  | 'pending' | 'running' | 'paused' | 'awaiting_gate'
+  | 'passed' | 'failed' | 'rework';
 
 type StageId = 'literature' | 'reproduction' | 'improvement' | 'experiment' | 'writing';
 ```
 
-### 3.3 文献
+`StageRun` 记录单次阶段运行的起止、状态、产出、gate 和用量;`StageUsage` 含 input/output/cache token 与成本,在右栏 Inspector 和运行状态面板中展示:
+
+```typescript
+interface StageRun {
+  id: string;
+  stage: StageId;
+  sessionFile?: string;
+  startedAt: number;
+  finishedAt?: number;
+  status: Exclude<StageStatus, 'pending'>;
+  lastActivityAt: number;
+  artifactIds: string[];
+  gateId?: string;
+  summary?: string;
+  usage?: StageUsage;
+}
+
+interface StageUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+}
+
+type StageActivityKind =
+  | 'started' | 'resumed' | 'paused' | 'artifact'
+  | 'gate_requested' | 'gate_decided' | 'error';
+
+interface StageActivity {
+  id: string;
+  stage: StageId;
+  kind: StageActivityKind;
+  at: number;
+  message: string;
+  artifactIds?: string[];
+  gateId?: string;
+}
+```
+
+### 3.3 PaperInbox(收件箱)
+
+收件箱集中沉淀用户离开期间发生的高信号事项,存储在 `.pp/inbox.json`。主进程在 gate 请求、`request_user_input`、`verification_gate`、`auto_retry` 失败和生命周期错误时写入 inbox 项;前端在顶栏、左侧导航和 Inspector 显示未处理计数,并提供独立收件箱视图。
+
+```typescript
+interface PaperInbox {
+  version: 1;
+  items: InboxItem[];
+  updatedAt: number;
+}
+
+interface InboxItem {
+  id: string;
+  projectId: string;
+  kind: 'gate' | 'clarification' | 'error' | 'attention';
+  status: 'open' | 'read' | 'resolved';
+  severity: 'info' | 'warning' | 'error';
+  title: string;
+  summary: string;
+  createdAt: number;
+  updatedAt: number;
+  stage?: StageId;
+  gateId?: string;
+  requestId?: string;           // 关联 request_user_input,用于去重
+  errorCode?: string;
+}
+```
+
+> 低信号工具失败(标题以"工具执行失败:"开头)在加载时被过滤,不进入收件箱。inbox 写入经 Promise 链串行化,避免并发冲突;`requestId` 去重防止渲染进程重连后重复转发。
+
+### 3.4 文献
 
 ```typescript
 interface Paper {
@@ -236,7 +355,7 @@ interface Paper {
 }
 ```
 
-### 3.4 论文存储(Markdown 主存储)
+### 3.5 论文存储(Markdown 主存储)
 
 **主存储**:`paper/manuscript.md`,agent 用 `write` 工具直接撰写与修改。
 
@@ -294,9 +413,13 @@ interface Paper {
 
 **阶段内小问题询问**:agent 自主调用 `request_user_input`(如"这块代码用 PyTorch 还是 JAX?"),走 `user-input-request` IPC,前端复用 ClarificationCard / ClarificationChip 多步问答状态机展示。
 
-> gate(编排器大决策,专用 IPC + GateCard)与 agent 小问题询问(`request_user_input` + ClarificationCard)职责分离,原因见 §5.3。
+> gate(编排器大决策,专用 IPC + GateReviewWorkspace)与 agent 小问题询问(`request_user_input` + ClarificationCard)职责分离,原因见 §5.3。
 
 **自主执行模式**:paper 项目默认 `executionMode: unattended`,agent 阶段内自主跑,只在 gate 和拿不准的小问题上打断用户。
+
+**阶段暂停/恢复**:运行中的阶段可暂停(`paper-pause-stage` IPC,先 `abort()` 当前 turn 再置 `paused`)和恢复(`paper-resume-stage`,发送 `buildResumeNudge` 让 agent 从中断处继续,而非重发完整阶段提示词)。暂停/恢复在 StageWorkspace 和右栏 Inspector 都有入口,状态写入 `StageState.pausedAt` 与活动流水。
+
+**自动推进与重启恢复**:gate 决策后编排器把下一阶段(`advance`)或返工目标(`rework`,带 `fork:true`)暂存到 `_pendingStart`,在 `agent_end` 事件触发 `onAgentEnd` 时才发送;rework 会先 `SessionBridge.clone()` 分叉 session 保留原始分支。在途 gate 持久化到 `.pp/progress.json` 的 `pendingGate`,应用重启后 `StageEngine.load()` 恢复,`respondGate` 检测到 `restoredGate` 且 session 空闲时直接推进,无需等待新的 `agent_end`。
 
 阶段 gate 不复用 `request_user_input`:StageEngine 通过 `paper-gate` IPC 发送 GateRequest,WorkspacePage 同时接收专用 gate 事件和状态快照。阶段内的小问题仍由 agent 调用 `request_user_input` 并显示 ClarificationCard。
 
@@ -420,12 +543,12 @@ server 正常启动路径由主进程解析为 `pi-paper-mcp` 的绝对入口,�
 
 | 工具 | 功能 | 备注 |
 |---|---|---|
-| `search_papers` | 学术检索(MVP: Semantic Scholar) | 返回 title/authors/abstract/year/citations/DOI/relevance |
-| `fetch_fulltext` | 下载论文 PDF(arXiv 等开放源) | 付费墙论文只能取 abstract |
-| `parse_pdf` | PDF -> 文本 + 结构 | 提取正文、章节、引用 |
-| `extract_figures` | 提取 PDF 中的图表 | 配合 takeHerEyes 分析 |
-| `generate_bibtex` | 生成 BibTeX 引用条目 | 从 Paper 元数据生成 |
-| `check_citation_support` | 引用是否支持声明(best-effort) | 非硬门禁,仅提示 |
+| `search_papers` | 学术检索(Semantic Scholar) | 入参 query/limit/yearFrom/yearTo/minCitations;返回 title/authors/abstract/year/venue/citations/DOI/arXivId/openAccessPdfUrl/relevance |
+| `fetch_fulltext` | 下载论文 PDF(arXiv 等开放源) | 入参 url/doi/arxivId/s2PaperId/outDir/filename;付费墙论文返回 abstract 并注明无开放 PDF |
+| `parse_pdf` | PDF -> 文本 + 结构 | 入参 path/maxPages/saveTextTo;正文存为同名 .txt,返回页数、元数据、章节大纲与预览 |
+| `extract_figures` | 提取 PDF 中的图表 | 入参 path/outDir/pages/maxFigures;提取内嵌光栅图为 PNG,矢量图无法提取并在 notes 注明 |
+| `generate_bibtex` | 生成 BibTeX 引用条目 | 有 DOI 时经 doi.org content negotiation 取出版商级条目,否则从 Semantic Scholar 元数据组装 |
+| `check_citation_support` | 引用是否支持声明(best-effort) | 入参 claim/pdfPath/doi/title/maxSnippets;基于关键词重叠召回证据片段,返回 verdictHint,非硬门禁 |
 
 > 多源检索(Crossref / OpenAlex)、引用网络分析后置 v2。
 
@@ -445,7 +568,7 @@ server 正常启动路径由主进程解析为 `pi-paper-mcp` 的绝对入口,�
 
 **gate 通道(不复用 request_user_input)**:`ExtensionAPI` 无主动发起 user input 的方法(`sendMessage`/`sendUserMessage`/`appendEntry` 只能加消息触发 turn,不能发询问),且 `request_user_input` 通道仅在 agent 内部调用该工具时触发,外部无法主动发起。因此 gate 走 stage-engine 专用 IPC(`paper-rpc.ts` 的 `paper-gate` 通道),前端用 GateCard 组件展示(视觉可参考 ClarificationCard);agent 小问题询问仍走 `request_user_input` + ClarificationCard。这样 SessionBridge 严格只加一个方法,且两类询问职责分离。
 
-参考:`McpAdapter` 已通过同样机制注入(`session-bridge.ts:1206` 的 `extensionFactories: [(pi) => { mcpAdapter.register(pi); }]`)。
+参考:`McpAdapter` 已通过同样机制注入(`session-bridge.ts:1230` 的 `extensionFactories: [(pi) => { mcpAdapter.register(pi); }]`)。
 
 ### 5.4 LLM 自主操作示例
 
@@ -482,50 +605,64 @@ server 正常启动路径由主进程解析为 `pi-paper-mcp` 的绝对入口,�
 
 前端样式(卡片视觉、配色、间距、图标、尺寸、动画)不做高保真/低保真规定,给开发发挥空间,遵循 PiX 现有视觉风格(干净、克制、低饱和,见 gui.md §12)。本节只划定**必备元素**和**大致摆放**,不约束具体实现。
 
-### 6.2 必备元素
+### 6.2 paper 工作台布局(PaperWorkspace)
 
-复用 PiX 三栏骨架(左导航 / 中工作区 / 右状态),paper 模式在此之上必须包含以下元素:
+paper 模式不复用 PiX 三栏 `AppLayout`,而由 `PaperWorkspace` 独立组织:顶栏 + 左侧 `PaperNavigation` + 中部视图切换区 + 右侧 `PaperInspector`,叠加 `AgentLogDrawer` 与 `PaperRuntimePanel` 两个抽屉。`WorkspacePage` 在 `isPaperMode` 为真时渲染 `PaperWorkspace`,否则回退到 `AppLayout`(三栏)作为非 paper 场景的兜底。
 
-| 区域 | 必备元素 | 来源 |
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ 顶栏:PiX-paper / 研究台 / 当前阶段 · 运行状态 · 模型选择 · 收件箱 · Agent 日志 · 运行状态 · 设置 · 概览  │
+├───────────────┬────────────────────────────────────────┬─────────────┤
+│ PaperNavigation│         中部视图(路由切换)              │ PaperInspector│
+│  项目名/主题    │  dashboard / stage / gate / library /   │  gate 提醒   │
+│  项目概览       │  figures / results / manuscript /       │  项目状态    │
+│  五阶段(状态/  │  artifact / inbox                       │  当前阶段    │
+│   产物数/审核)  │                                          │  (暂停/恢复) │
+│  审核工作区     │                                          │  运行成本    │
+│  产物(文献/图/  │                                          │  产物列表    │
+│   结果/论文)    │                                          │  最近活动    │
+│  待你处理       │                                          │              │
+│  运行状态/切换   │                                          │              │
+└───────────────┴────────────────────────────────────────┴─────────────┘
+        AgentLogDrawer(对话流 + ClarificationCard + composer)
+        PaperRuntimePanel(运行状态:模型/token/MCP,复用 RightPanel)
+```
+
+中部视图由 Vue Router 驱动(`/workspace/<view>`),9 个视图:
+
+| 视图 | 组件 | 职责 |
 |---|---|---|
-| 全局 | 阶段进度指示(当前阶段 + 五阶段状态:pending/running/passed/failed) | 新增 |
-| 全局 | 当前 paper 项目标识(主题) | 新增 |
-| 中栏 | 对话区(agent 输出 / 工具执行 / 用户输入) | 复用 SessionView |
-| 中栏 | 阶段 gate 卡(产物摘要 + 质量检查 + 继续/返工/终止) | 新增,行为见 §4.2 |
-| 中栏 | 阶段内小问题询问 | 复用 ClarificationCard |
-| 中栏 | 输入区(文本 + 发送/停止) | 复用 |
-| 右栏 | 阶段产物列表(可打开) | 新增 |
-| 右栏 | 模型 / token / goal 预算 / MCP / 后台任务 | 复用 RightPanel |
+| dashboard | StageDashboard | 项目概览:注意力横幅、五阶段管线卡片(状态/耗时/产物/主产物预览)、最近活动 |
+| stage | StageWorkspace | 单阶段工作台:暂停/恢复/启动、产物表、阶段活动时间线、内联产物预览 |
+| gate | GateReviewWorkspace | 阶段审核:主产物预览 + 修订版本对比、相关产物、Agent 摘要、质量检查、决策(继续/返工/终止) |
+| library | ArtifactCatalogView | 文献池:`literature_pool` 产物,搜索/排序 + LiteraturePoolView |
+| figures | ArtifactCatalogView | 图表画廊:`figure` 产物 + FigureGalleryView |
+| results | ArtifactCatalogView | 实验结果:`experiment_result`/`experiment_config` + ExperimentResultsView |
+| manuscript | ManuscriptView | 论文中心:渲染 manuscript.md,内联图表图片、解析引用 key |
+| artifact | PaperArtifactView | 单产物详情:ArtifactPreview + ArtifactRelationsPanel |
+| inbox | InboxView | 收件箱:gate/澄清/错误/验证等待事项,筛选未解决/全部,标记已解决 |
 
-阶段进度指示、gate 卡、阶段产物列表是 paper 工作台的核心元素,必须可见且易达。
+### 6.3 核心交互(行为约束)
 
-### 6.3 大致摆放
-
-- 阶段进度指示:中栏显眼位置(顶部或工作区上方),让用户随时知道在第几阶段
-- gate 卡和小问题询问:在对话流中出现,或固定在工作区底部,确保不错过
-- 阶段产物列表:右栏(复用现有右栏追加一张卡)或左栏,开发择优
-- 输入区:底部,复用 PiX 位置
-- 三栏比例、卡片顺序、具体尺寸由开发定
-
-### 6.4 核心交互(行为约束)
-
-- **阶段进度**:点击某阶段筛选该阶段产物;当前阶段高亮,显示运行耗时/返工目标/时间 tooltip
-- **阶段 gate**:展示该阶段产物摘要 + best-effort 质量检查结果,选项为继续下一阶段 / 返工(指定阶段+原因)/ 终止;终止需二次确认
-- **小问题询问**:复用 ClarificationCard / ClarificationChip 多步问答
-- **产物浏览**:当前已实现点击产物用系统默认程序打开,也可在文件夹中定位;内置 Markdown/PDF 预览后置
-- **论文预览**:当前通过系统默认程序打开 `manuscript.md`;应用内预览和一键 pandoc 导出后置
-- **创建 paper 项目**:HomePage 入口,输入研究主题后初始化五阶段
+- **阶段进度**:左侧导航与 dashboard 卡片均展示五阶段状态(pending/running/paused/awaiting_gate/passed/failed/rework)、产物数与审核提醒;点击进入对应 StageWorkspace
+- **阶段暂停/恢复**:StageWorkspace 顶栏与右栏 Inspector 在 running 时提供暂停、paused 时提供恢复、pending 时提供启动;暂停先 abort 当前 turn
+- **阶段 gate**:收到 `paper-gate` 事件自动导航到 gate 视图;GateReviewWorkspace 展示主产物应用内预览(可对比上一修订版本,显示 SHA-256 前缀)、Agent 摘要(markdown 渲染)、best-effort 质量检查;决策为通过进下一阶段 / 返工(选目标阶段 + 原因)/ 终止(二次确认)
+- **小问题询问**:agent 调用 `request_user_input` 触发 `AgentLogDrawer` 内的 ClarificationCard/ClarificationChip 多步问答;drawer 在 paper 视图间切换时保持,不取消请求
+- **产物预览**:`ArtifactPreview` 在应用内渲染 Markdown(渲染)/文本/JSON(`<pre>`,长文本折叠展开)/图片(`<img>`)/PDF(`<iframe>`),不支持类型回退到系统默认程序;同时保留"在文件夹中定位"
+- **论文预览**:`ManuscriptView` 渲染 manuscript.md,从 `literature_pool` 解析引用 key、从 `figure` 产物内联图表图片;导出仍由 agent 通过 bash pandoc 完成
+- **收件箱**:顶栏与导航显示未处理计数;InboxView 按 open/all 筛选,处理项跳转到对应 gate/澄清/阶段
+- **运行状态**:`PaperRuntimePanel` 抽屉复用 RightPanel 展示模型/token/MCP,并提供模型/API 密钥/MCP 设置入口
+- **创建 paper 项目**:HomePage 入口,CreatePaperDialog 收集目录(实时校验可写/是否已为 paper 项目)、项目名、研究主题,初始化五阶段
 - **打开 paper 项目**:HomePage 入口,选择已有 paper 项目目录(校验 `.pp/`,非 paper 拒绝);最近项目列表自动过滤非 paper 目录
 
-### 6.5 当前已知交互缺口
+### 6.4 当前已知交互缺口
 
 以下项目不影响核心阶段流转,暂列为后续体验工作:
 
-1. 离开 Workspace 时未答完的 `request_user_input` 会被取消,尚未跨路由保留。
-2. 产物暂不提供应用内 Markdown/PDF/JSON 预览。
-3. 长实验只有停止入口,暂无阶段级暂停/恢复和 ETA/当前活动摘要。
-4. paper 会话列表已有 Paper 标识和新建普通会话确认,但尚未为每个历史 session 显示所属阶段标签。
-5. 创建对话框已有阶段说明、主题宽泛提醒和成本提示,尚未接入可执行的 token 预算字段。
+1. 完全离开工作台(如进入设置页)后,未答完的 `request_user_input` 活动状态不保留;paper 视图间切换已通过 drawer 保留,收件箱也会留下记录。
+2. 长实验有暂停/恢复与运行耗时,但尚无完整 ETA 和"当前活动摘要"。
+3. 历史会话列表已有 Paper 模式标识,但尚未为每个历史 session 显示所属阶段标签。
+4. 创建对话框已有阶段说明、主题宽泛提醒和成本提示,尚未接入可执行的 token 预算字段(右栏 Inspector 已展示每阶段实际成本)。
 
 ---
 
@@ -555,8 +692,10 @@ server 正常启动路径由主进程解析为 `pi-paper-mcp` 的绝对入口,�
 projects/
 └── my-research/
     ├── .pp/                          # paper 项目配置
-    │   ├── config.json               # 主题、创建时间等
-    │   └── progress.json             # stage 进度 + artifact 注册表(合并)
+    │   ├── config.json               # PaperProjectConfig(主题、创建时间等)
+    │   ├── progress.json             # PaperProgress:阶段状态机 + artifact/revision/stageRun/activity 注册表 + pendingGate
+    │   ├── inbox.json                # PaperInbox:gate/澄清/错误/验证等待事项
+    │   └── snapshots/<artifactId>/   # 产物修订不可变快照(r<revision><ext>)
     ├── .pi/
     │   └── mcp.json                  # papers MCP server(由 PiX 自动维护)
     │
@@ -593,14 +732,14 @@ projects/
 
 | paper 需求 | 复用的 PiX / pi 能力 | 证据来源 |
 |---|---|---|
-| 阶段 gate 询问(返工/继续/终止) | stage-engine 专用 IPC(`paper-gate`)+ GateCard 组件 | `stage-engine.ts` requestReview、`paper-rpc.ts` |
+| 阶段 gate 询问(返工/继续/终止) | stage-engine 专用 IPC(`paper-gate`)+ GateReviewWorkspace 组件 | `stage-engine.ts` requestReview、`paper-rpc.ts` |
 | 阶段内小问题询问 | `request_user_input`(agent 主动调用)+ ClarificationCard | `session-bridge.ts` _requestUserInput、`WorkspacePage.vue` pendingUserInput |
-| stage-engine 工具注入 | `ExtensionFactory` + `DefaultResourceLoader.extensionFactories` | `session-bridge.ts:1206`、`extensions/types.ts:1381` |
+| stage-engine 工具注入 | `ExtensionFactory` + `DefaultResourceLoader.extensionFactories` | `session-bridge.ts:194` addExtraExtensionFactories、`session-bridge.ts:1230` extensionFactories 合并 |
 | 阶段内自主执行 | `executionMode: unattended` | `RpcSessionState.executionMode`、CenterPanel 执行模式选择器 |
 | 质量门禁 | StageEngine best-effort Artifact/摘要检查;不作硬门禁 | `stage-engine.ts` `runQualityChecks` |
 | 返工 / 版本分支 | gate 后 `SessionBridge.clone()` 创建分支,普通树操作仍支持 fork/navigateTree | `SessionBridge.clone`、`StageEngine.onAgentEnd` |
-| 成本 / 预算控制 | `ThreadGoal`(tokenBudget / timeUsedMs) | `ThreadGoal` 类型、RightPanel 目标卡 |
-| 工具注册 | pi-mcp-adapter(extension factory 注入 DefaultResourceLoader) | `session-bridge.ts:1194` |
+| 成本 / 预算控制 | `ThreadGoal`(tokenBudget / timeUsedMs)+ 每阶段 `StageRun.usage` 实际成本 | `ThreadGoal` 类型、RightPanel 目标卡、PaperInspector 运行成本 |
+| 工具注册 | pi-mcp-adapter(extension factory 注入 DefaultResourceLoader) | `session-bridge.ts:1231` mcpAdapter.register |
 | 图表 / PDF 视觉分析 | `takeHerEyes`(视觉模型,主模型不支持 image 时自动调用) | `SessionBridge._tryTakeHerEyes` |
 | 会话历史回看 | `SessionManager.list` / `open` | `list-sessions` handler |
 | 设置持久化 | pix-settings + `SettingsManager.applyOverrides` | `settings-store.ts`、`_createSettingsManager` |
@@ -629,11 +768,14 @@ projects/
 
 以下内容与当前代码保持一致:
 
-1. paper 项目通过 `.pp/` 目录识别;创建时生成阶段目录骨架、`config.json`、`progress.json`、`literature/library.json`、`paper/manuscript.md`、`paper/references.bib`。
-2. paper 项目启动前由 `ipc-handlers.ts` 注入 StageEngine extension factory,设置内存级 `execution.mode=unattended`,刷新 `.pi/mcp.json`,再创建 AgentSession。
-3. `request_stage_review` 只允许审核当前阶段;gate 使用 `paper-gate` 专用 IPC,agent 小问题仍使用 `request_user_input`。
-4. gate 决策会持久化到 `.pp/progress.json`;通过后由 `agent_end` 自动发送下一阶段提示词,返工会在 agent 空闲后 clone session 再启动目标阶段。
-5. Workspace 已实现阶段进度、GateCard、产物列表、Paper 模式标识、gate 终止确认、gate 产物打开、质量检查 detail、paper 错误提示和长任务 gate 系统通知。
-6. paper MCP 已实现 6 个工具,开发态可完成 stdio `listTools()` 握手;打包依赖树包含 server、MCP SDK、PDF.js、PNG.js、Zod 及其运行时依赖。
-7. 当前已知体验缺口:澄清跨路由保留、应用内 Markdown/PDF/JSON 预览、阶段暂停/ETA、历史 session 阶段标签和 token 预算字段。
-8. PiX-paper 严格 paper-only:`start-pi` 拒绝非 paper 项目;主页"打开 Paper 项目"入口通过 `paper-check-project` IPC 预校验 `.pp/`;最近项目列表在 `loadSettings` 时过滤掉非 paper 目录。`package.json` 已更名为 `pix-paper`,`appId` 改为 `com.pixpaper.app`,发布通道指向 `Sombrer0-1/PiX-paper`。
+1. paper 项目通过 `.pp/` 目录识别;创建时生成阶段目录骨架、`.pp/config.json`、`.pp/progress.json`、`.pp/inbox.json`、`literature/library.json`、`paper/manuscript.md`、`paper/references.bib`,并写入 `.pi/mcp.json` 注册 papers server。
+2. paper 项目启动前由 `ipc-handlers.ts` 的 `start-pi` 校验 `.pp/`,创建 StageEngine,经 `addExtraExtensionFactories` 注入 `request_stage_review` 工具,设置内存级 `execution.mode=unattended`,刷新 `.pi/mcp.json`,再创建 AgentSession,最后 `stageEngine.load()` 恢复 config/progress/inbox。
+3. `request_stage_review` 只允许审核当前阶段(否则抛错);gate 使用 `paper-gate` 专用 IPC,agent 小问题仍使用 `request_user_input`(经 `user-input-request` 通道 + ClarificationCard)。
+4. gate 决策持久化到 `.pp/progress.json`(含 `pendingGate`);通过后由 `agent_end` 触发 `onAgentEnd` 自动发送下一阶段提示词,返工在 agent 空闲后 `clone()` session 再启动目标阶段;重启后恢复的在途 gate 在 session 空闲时直接推进。
+5. 阶段支持暂停/恢复(`paper-pause-stage` / `paper-resume-stage`),暂停先 abort 当前 turn,恢复发送 `buildResumeNudge`。
+6. paper 工作台为 `PaperWorkspace` 多视图研究台:顶栏 + `PaperNavigation` + 路由视图(dashboard/stage/gate/library/figures/results/manuscript/artifact/inbox)+ `PaperInspector` + `AgentLogDrawer`(对话流 + 澄清 + composer)+ `PaperRuntimePanel`(运行状态抽屉)。`paper-gate` 事件自动导航到 gate 视图。
+7. 产物支持应用内预览:`ArtifactPreview` 渲染 Markdown/文本/JSON/图片/PDF;`ManuscriptView` 渲染手稿并内联图表与引用;`GateReviewWorkspace` 支持修订版本对比(显示 SHA-256 前缀)。Inspector 展示每阶段实际 token/成本(`StageRun.usage`)。
+8. 收件箱(`.pp/inbox.json`)集中沉淀 gate/澄清/错误/验证等待事项,顶栏与导航显示未处理计数,未聚焦窗口时桌面通知。
+9. paper MCP 已实现 6 个工具;打包依赖树包含 server、MCP SDK、PDF.js、PNG.js、Zod 及其运行时依赖,正常打包路径不依赖用户 PATH。
+10. 当前已知体验缺口:完全离开工作台后澄清活动状态不保留、完整 ETA/活动摘要、历史 session 阶段标签、可执行 token 预算字段。
+11. PiX-paper 严格 paper-only:`start-pi` 拒绝非 paper 项目;主页"打开 Paper 项目"入口通过 `paper-check-project` IPC 预校验 `.pp/`;最近项目列表在 `loadSettings` 时过滤掉非 paper 目录。`package.json` 已更名为 `pix-paper`,`appId` 改为 `com.pixpaper.app`,发布通道指向 `Sombrer0-1/PiX-paper`。

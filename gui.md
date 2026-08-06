@@ -1,6 +1,6 @@
 # PiX-paper GUI 设计文档
 
-> **实现同步:2026-07-21。** PiX-paper 是基于 PiX 的独立产品,严格 paper-only(非 paper 目录拒绝启动,通用 coding 入口已移除)。它复用 PiX 的三栏工作台与 session / session-tree / RightPanel 等基础能力,在此之上叠加五阶段编排。以下 paper 相关交互以当前实现为准,未完成体验项见 §8.4;§1–§6、§10–§14 描述的是被复用的 PiX 外壳设计。
+> **实现同步:2026-08-06。** PiX-paper 是基于 PiX 的独立产品,严格 paper-only(非 paper 目录拒绝启动,通用 coding 入口已移除)。它复用 PiX 的 session / session-tree / RightPanel / ClarificationCard 等基础能力,但 paper 模式不再套用 PiX 三栏 `AppLayout`,而是渲染独立的多视图研究台 `PaperWorkspace`(顶栏 + 左导航 + 路由视图 + 右 Inspector + 抽屉)。以下 paper 相关交互以当前实现为准,未完成体验项见 §8.4;§1–§6、§10–§14 描述的是被复用的 PiX 外壳设计。
 
 ## 1. 项目背景
 
@@ -330,14 +330,16 @@ MVP 只包含：
 
 工作台页是主要页面。
 
-包含：
+非 paper 模式采用 PiX 三栏布局：
 
 1. 左侧项目和会话
 2. 中间当前会话
 3. 右侧状态摘要
 4. 底部输入区
 
-工作台页的核心任务是让用户持续推进一个 pi 会话。
+paper 模式则渲染 `PaperWorkspace` 多视图研究台（见 §7.5），不复用三栏 `AppLayout`。
+
+工作台页的核心任务是让用户持续推进一个会话/paper 项目。
 
 ------
 
@@ -379,17 +381,19 @@ MVP 只包含：
 
 ### 7.5 PiX-paper 工作台
 
-paper 项目通过目录中的 `.pp/` 标记进入 paper 模式,不创建独立窗口或独立会话 UI。当前工作台在既有三栏布局上增加:
+paper 项目通过目录中的 `.pp/` 标记进入 paper 模式,不创建独立窗口。`WorkspacePage` 在 paper 模式下渲染 `PaperWorkspace`(替代 PiX 三栏 `AppLayout`),结构为:顶栏 + 左侧 `PaperNavigation` + 中部路由视图 + 右侧 `PaperInspector`,叠加 `AgentLogDrawer` 与 `PaperRuntimePanel` 两个抽屉。
 
-1. 首页的“创建 Paper 项目”入口,负责初始化 `.pp/` 配置、阶段目录和 papers MCP 配置。
-2. 中栏顶部的五阶段 `StageProgress`,点击阶段筛选右栏产物。
-3. 中栏 `GateCard`,展示阶段摘要、Artifact、best-effort 质量检查,支持继续/返工/终止;终止需要二次确认。
-4. 中栏 `ClarificationCard`,继续承载 agent 阶段内的 `request_user_input`;它与 paper gate 使用不同 IPC 通道。
-5. 中栏 paper 错误提示和 paper 模式引导;PiX-paper 严格 paper-only,不再有 coding 模式的快速启动提示。
-6. 右栏阶段产物列表,支持系统默认程序打开和在文件夹中定位。
-7. 左栏 Paper 标识;paper 模式中新建脱离阶段流的普通会话前显示确认。
+1. 首页的”创建 Paper 项目”入口(CreatePaperDialog),负责初始化 `.pp/` 配置、阶段目录和 papers MCP 配置;目录实时校验可写/是否已为 paper 项目,主题过短有提醒,含阶段说明与成本提示。
+2. 顶栏:产品/研究台/当前阶段、运行状态点(agent 运行中/等待审核/已连接)、模型选择器、收件箱(未处理计数)、Agent 日志、运行状态、设置、概览入口。
+3. 左侧 `PaperNavigation`:项目名与研究主题、项目概览、五阶段(状态/产物数/审核提醒)、审核工作区、产物分组(文献池/图表/实验结果/论文中心)、待你处理(收件箱)、运行状态与切换项目。
+4. 中部 9 个路由视图:`dashboard`(StageDashboard 概览)、`stage`(StageWorkspace 单阶段工作台,含暂停/恢复/启动、产物表、活动时间线、内联预览)、`gate`(GateReviewWorkspace 审核)、`library`/`figures`/`results`(ArtifactCatalogView 产物目录,搜索/排序)、`manuscript`(ManuscriptView 论文中心)、`artifact`(单产物详情)、`inbox`(收件箱)。
+5. `GateReviewWorkspace`:主产物应用内预览 + 修订版本对比(显示 SHA-256 前缀)、相关产物、Agent 摘要(markdown)、best-effort 质量检查、决策(通过/返工选目标+原因/终止二次确认)。
+6. `ClarificationCard` 在 `AgentLogDrawer` 内承载 agent 阶段内的 `request_user_input`,与 paper gate 使用不同 IPC 通道;drawer 在 paper 视图间切换时保持。
+7. `ArtifactPreview` 在应用内渲染 Markdown/文本/JSON/图片/PDF,不支持类型回退系统默认程序;产物也可在文件夹中定位。
+8. 右侧 `PaperInspector`:gate 提醒、项目状态(已通过/5、待处理数)、当前阶段(暂停/恢复/启动、运行成本)、产物列表、最近活动。
+9. `PaperRuntimePanel` 抽屉复用 RightPanel 展示模型/token/MCP,并提供设置入口;`AgentLogDrawer` 提供 composer(prompt/steer,草稿按阶段保存)。
 
-paper gate 由主进程 `paper-gate` 事件驱动,状态快照由 `paper-state-changed` 同步;两者都通过 preload 暴露,前端以 gate 事件作为即时信号、以状态快照作为持久状态。
+paper gate 由主进程 `paper-gate` 事件驱动(收到即自动导航到 gate 视图),状态快照由 `paper-state-changed` 同步,收件箱变更由 `paper-inbox-changed` 同步;三者都通过 preload 暴露,前端以 gate 事件作为即时信号、以状态快照作为持久状态。
 
 ------
 
@@ -459,11 +463,10 @@ paper gate 由主进程 `paper-gate` 事件驱动,状态快照由 `paper-state-c
 
 以下能力尚未实现,不应在界面或文档中描述为已具备:
 
-1. 离开 Workspace 后保留未完成的多问题澄清;当前离开页面会取消请求。
-2. 应用内 Markdown/PDF/JSON 产物预览;当前使用系统默认程序或文件夹定位。
-3. 阶段级暂停/恢复、ETA 和实验当前活动摘要;当前只提供停止 Agent turn。
-4. 历史 session 的阶段标签;当前只显示 Paper 模式标识。
-5. 创建 Paper 项目的可执行 token 预算字段;当前只有成本和预算提示。
+1. 完全离开工作台(如进入设置页)后保留未完成的多问题澄清活动状态;paper 视图间切换已通过 `AgentLogDrawer` 保留,收件箱也会留下记录。
+2. 长实验的完整 ETA 与"当前活动摘要";当前有暂停/恢复与运行耗时,但无预计完成时间。
+3. 历史 session 的阶段标签;当前只显示 Paper 模式标识。
+4. 创建 Paper 项目的可执行 token 预算字段;当前只有成本提示,右栏 Inspector 展示每阶段实际成本。
 
 ------
 
@@ -838,11 +841,12 @@ MVP 目标是跑通 GUI 外壳和 pi 的基本交互。
 
 Paper MVP 核心链路已完成并进入联调/验收:
 
-1. 五阶段状态机、阶段提示词、Artifact 注册和 gate 决策已实现。
-2. `request_stage_review`、专用 `paper-gate` IPC、gate 结果回传和 `agent_end` 自动推进已实现。
-3. 创建 Paper 项目、项目骨架、`.pp/progress.json` 和 paper 工作台组件已实现。
-4. `packages/paper-mcp` 的 6 个工具已实现;MCP server 作为 pix 生产依赖打包,正常打包路径不依赖 PATH 上的裸 `pi-paper-mcp` 命令,模块解析失败时仅保留开发环境 fallback。
-5. 仍按 §8.4 的限制项推进体验增强。
+1. 五阶段状态机、阶段提示词、Artifact + ArtifactRevision 注册和 gate 决策已实现。
+2. `request_stage_review`、专用 `paper-gate` IPC、gate 结果回传、`agent_end` 自动推进、暂停/恢复和在途 gate 重启恢复已实现。
+3. 创建 Paper 项目、项目骨架、`.pp/progress.json`、`.pp/inbox.json`、产物修订快照和 paper 工作台组件已实现。
+4. paper 工作台为 `PaperWorkspace` 多视图研究台(顶栏/导航/9 个路由视图/Inspector/抽屉),支持应用内 Markdown/文本/JSON/图片/PDF 预览、手稿渲染、修订版本对比、收件箱和每阶段成本展示。
+5. `packages/paper-mcp` 的 6 个工具已实现;MCP server 作为 pix 生产依赖打包,正常打包路径不依赖 PATH 上的裸 `pi-paper-mcp` 命令,模块解析失败时仅保留开发环境 fallback。
+6. 仍按 §8.4 的限制项推进体验增强。
 
 ------
 
