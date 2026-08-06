@@ -5,7 +5,6 @@
  */
 
 import Store from "electron-store";
-import { existsSync, statSync } from "fs";
 import type { GuiSettings, ProjectInfo } from "../shared/types.js";
 
 const defaultSettings: GuiSettings = {
@@ -28,7 +27,6 @@ export class SettingsStore {
   }
 
   getAll(): GuiSettings {
-    this.pruneMissingRecentProjects();
     return this.store.store;
   }
 
@@ -107,21 +105,5 @@ export class SettingsStore {
       "recentProjects",
       projects.filter((p: ProjectInfo) => p.path !== path)
     );
-  }
-
-  private pruneMissingRecentProjects(): void {
-    const projects = this.store.get("recentProjects") || [];
-    const existingProjects = projects.filter((project: ProjectInfo) => this.projectPathExists(project.path));
-    if (existingProjects.length !== projects.length) {
-      this.store.set("recentProjects", existingProjects);
-    }
-  }
-
-  private projectPathExists(path: string): boolean {
-    try {
-      return existsSync(path) && statSync(path).isDirectory();
-    } catch {
-      return false;
-    }
   }
 }

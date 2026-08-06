@@ -15,19 +15,18 @@ import {
 	type ArtifactType,
 	type GateDecision,
 	type GateRequest,
-	type PaperProgress,
-	PAPER_PROGRESS_VERSION,
-	STAGE_IDS,
-	type StageId,
-	type StageActivity,
-	type StageActivityKind,
-	type StageRun,
-	type StageProgress,
-	type StageState,
-	type StageStatus,
-	type QualityCheckItem,
 	isArtifactType,
 	isStageId,
+	PAPER_PROGRESS_VERSION,
+	type PaperProgress,
+	type QualityCheckItem,
+	STAGE_IDS,
+	type StageActivity,
+	type StageActivityKind,
+	type StageId,
+	type StageRun,
+	type StageState,
+	type StageStatus,
 } from "./types.ts";
 
 export const STAGE_LABELS: Record<StageId, string> = {
@@ -92,8 +91,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isStageStatus(value: unknown): value is StageStatus {
-	return value === "pending" || value === "running" || value === "paused" || value === "awaiting_gate" ||
-		value === "passed" || value === "failed" || value === "rework";
+	return (
+		value === "pending" ||
+		value === "running" ||
+		value === "paused" ||
+		value === "awaiting_gate" ||
+		value === "passed" ||
+		value === "failed" ||
+		value === "rework"
+	);
 }
 
 function isArtifactRelationKind(value: unknown): value is ArtifactRelationKind {
@@ -123,12 +129,14 @@ function parseArtifact(value: unknown): Artifact | null {
 		createdAt: value.createdAt,
 		role: value.role === "primary" || value.role === "supporting" ? value.role : undefined,
 		latestRevisionId: typeof value.latestRevisionId === "string" ? value.latestRevisionId : undefined,
-		relations: Array.isArray(value.relations) ? value.relations.filter(isRecord).map((relation) => ({
-			kind: isArtifactRelationKind(relation.kind) ? relation.kind : "supports",
-			targetArtifactId: typeof relation.targetArtifactId === "string" ? relation.targetArtifactId : undefined,
-			targetPath: typeof relation.targetPath === "string" ? relation.targetPath : undefined,
-			label: typeof relation.label === "string" ? relation.label : undefined,
-		})) : undefined,
+		relations: Array.isArray(value.relations)
+			? value.relations.filter(isRecord).map((relation) => ({
+					kind: isArtifactRelationKind(relation.kind) ? relation.kind : "supports",
+					targetArtifactId: typeof relation.targetArtifactId === "string" ? relation.targetArtifactId : undefined,
+					targetPath: typeof relation.targetPath === "string" ? relation.targetPath : undefined,
+					label: typeof relation.label === "string" ? relation.label : undefined,
+				}))
+			: undefined,
 		metadata: isRecord(value.metadata) ? value.metadata : undefined,
 	};
 }
@@ -161,8 +169,15 @@ function parseArtifactRevision(value: unknown): ArtifactRevision | null {
 }
 
 function isStageActivityKind(value: unknown): value is StageActivityKind {
-	return value === "started" || value === "resumed" || value === "paused" || value === "artifact" ||
-		value === "gate_requested" || value === "gate_decided" || value === "error";
+	return (
+		value === "started" ||
+		value === "resumed" ||
+		value === "paused" ||
+		value === "artifact" ||
+		value === "gate_requested" ||
+		value === "gate_decided" ||
+		value === "error"
+	);
 }
 
 function parseStageRun(value: unknown): StageRun | null {
@@ -175,21 +190,23 @@ function parseStageRun(value: unknown): StageRun | null {
 		!isStageStatus(value.status) ||
 		value.status === "pending" ||
 		!Array.isArray(value.artifactIds)
-	) return null;
-	const usage = isRecord(value.usage) &&
+	)
+		return null;
+	const usage =
+		isRecord(value.usage) &&
 		typeof value.usage.inputTokens === "number" &&
 		typeof value.usage.outputTokens === "number" &&
 		typeof value.usage.cacheReadTokens === "number" &&
 		typeof value.usage.cacheWriteTokens === "number" &&
 		typeof value.usage.cost === "number"
-		? {
-			inputTokens: value.usage.inputTokens,
-			outputTokens: value.usage.outputTokens,
-			cacheReadTokens: value.usage.cacheReadTokens,
-			cacheWriteTokens: value.usage.cacheWriteTokens,
-			cost: value.usage.cost,
-		}
-		: undefined;
+			? {
+					inputTokens: value.usage.inputTokens,
+					outputTokens: value.usage.outputTokens,
+					cacheReadTokens: value.usage.cacheReadTokens,
+					cacheWriteTokens: value.usage.cacheWriteTokens,
+					cost: value.usage.cost,
+				}
+			: undefined;
 	return {
 		id: value.id,
 		stage: value.stage,
@@ -213,7 +230,8 @@ function parseStageActivity(value: unknown): StageActivity | null {
 		!isStageActivityKind(value.kind) ||
 		typeof value.at !== "number" ||
 		typeof value.message !== "string"
-	) return null;
+	)
+		return null;
 	return {
 		id: value.id,
 		stage: value.stage,
@@ -244,7 +262,8 @@ function parseGateRequest(value: unknown): GateRequest | null {
 		typeof value.summary !== "string" ||
 		!Array.isArray(value.artifacts) ||
 		typeof value.requestedAt !== "number"
-	) return null;
+	)
+		return null;
 	const artifacts = value.artifacts.map(parseArtifact).filter((artifact): artifact is Artifact => artifact !== null);
 	const checks = Array.isArray(value.checks)
 		? value.checks.map(parseQualityCheck).filter((check): check is QualityCheckItem => check !== null)
@@ -274,11 +293,14 @@ export function migratePaperProgress(input: unknown): PaperProgress {
 		stages[stage] = {
 			...stages[stage],
 			status,
-			artifacts: Array.isArray(value.artifacts) ? value.artifacts.filter((id): id is string => typeof id === "string") : [],
+			artifacts: Array.isArray(value.artifacts)
+				? value.artifacts.filter((id): id is string => typeof id === "string")
+				: [],
 			sessionFile: typeof value.sessionFile === "string" ? value.sessionFile : undefined,
-			gateDecision: value.gateDecision === "continue" || value.gateDecision === "rework" || value.gateDecision === "abort"
-				? value.gateDecision
-				: undefined,
+			gateDecision:
+				value.gateDecision === "continue" || value.gateDecision === "rework" || value.gateDecision === "abort"
+					? value.gateDecision
+					: undefined,
 			reworkTarget: isStageId(value.reworkTarget) ? value.reworkTarget : undefined,
 			runId: typeof value.runId === "string" ? value.runId : undefined,
 			startedAt: typeof value.startedAt === "number" ? value.startedAt : undefined,
@@ -291,7 +313,9 @@ export function migratePaperProgress(input: unknown): PaperProgress {
 		? input.artifacts.map(parseArtifact).filter((artifact): artifact is Artifact => artifact !== null)
 		: [];
 	const artifactRevisions = Array.isArray(input.artifactRevisions)
-		? input.artifactRevisions.map(parseArtifactRevision).filter((revision): revision is ArtifactRevision => revision !== null)
+		? input.artifactRevisions
+				.map(parseArtifactRevision)
+				.filter((revision): revision is ArtifactRevision => revision !== null)
 		: [];
 	return {
 		version: PAPER_PROGRESS_VERSION,
@@ -342,6 +366,7 @@ export function startStage(progress: PaperProgress, stage: StageId, sessionFile?
 		pausedAt: undefined,
 		lastActivityAt: startedAt,
 		runId,
+		reworkTarget: undefined,
 		sessionFile: sessionFile ?? progress.stage.stages[stage].sessionFile,
 	});
 	const run: StageRun = {
@@ -374,10 +399,12 @@ export interface DeclaredArtifact {
 }
 
 function sameArtifactRelation(left: ArtifactRelation, right: ArtifactRelation): boolean {
-	return left.kind === right.kind &&
+	return (
+		left.kind === right.kind &&
 		left.targetArtifactId === right.targetArtifactId &&
 		left.targetPath === right.targetPath &&
-		left.label === right.label;
+		left.label === right.label
+	);
 }
 
 /** Register logical artifacts and append a new revision for each declaration. */
@@ -402,7 +429,8 @@ export function registerArtifacts(
 			role: item.role,
 			metadata: item.metadata,
 		};
-		const revisionNumber = (next.artifactRevisions ?? []).filter((revision) => revision.artifactId === artifact.id).length + 1;
+		const revisionNumber =
+			(next.artifactRevisions ?? []).filter((revision) => revision.artifactId === artifact.id).length + 1;
 		const revision: ArtifactRevision = {
 			id: createId("revision"),
 			artifactId: artifact.id,
@@ -418,9 +446,10 @@ export function registerArtifacts(
 			latestRevisionId: revision.id,
 			metadata: item.metadata ?? artifact.metadata,
 			relations: item.relations?.length
-				? [...(artifact.relations ?? []), ...item.relations].filter((relation, index, relations) =>
-					relations.findIndex((candidate) => sameArtifactRelation(candidate, relation)) === index,
-				)
+				? [...(artifact.relations ?? []), ...item.relations].filter(
+						(relation, index, relations) =>
+							relations.findIndex((candidate) => sameArtifactRelation(candidate, relation)) === index,
+					)
 				: artifact.relations,
 		};
 		next = {
@@ -492,7 +521,10 @@ export type GateOutcome =
  * - rework: roll back to an earlier (or the same) stage; later stages reset to pending.
  * - abort: stage failed; progress halted.
  */
-export function applyGateDecision(progress: PaperProgress, decision: GateDecision): { progress: PaperProgress; outcome: GateOutcome } {
+export function applyGateDecision(
+	progress: PaperProgress,
+	decision: GateDecision,
+): { progress: PaperProgress; outcome: GateOutcome } {
 	const gate = progress.pendingGate;
 	const stage = gate?.stage ?? progress.stage.current;
 	const decidedAt = Date.now();
@@ -540,8 +572,11 @@ export function applyGateDecision(progress: PaperProgress, decision: GateDecisio
 		const requested = decision.reworkTarget && isStageId(decision.reworkTarget) ? decision.reworkTarget : stage;
 		const target = STAGE_IDS.indexOf(requested) <= STAGE_IDS.indexOf(stage) ? requested : stage;
 		recordDecision("rework");
-	next = withStage(next, stage, { reworkTarget: target });
-		// Reset the target and everything after it, retaining artifact history.
+		// Reset everything after the target, retaining artifact history. The target
+		// itself is left untouched; the engine starts it after forking the session
+		// (design §4.1/§10) so the new run records the forked sessionFile, not the
+		// pre-fork one. Starting it here would trip startStage's idempotency guard
+		// and drop the forked sessionFile.
 		const targetIndex = STAGE_IDS.indexOf(target);
 		for (let i = targetIndex; i < STAGE_IDS.length; i++) {
 			const id = STAGE_IDS[i];
@@ -559,8 +594,12 @@ export function applyGateDecision(progress: PaperProgress, decision: GateDecisio
 				});
 			}
 		}
+		// Record the rework target on the gate stage AFTER the reset pass; for
+		// rework-to-earlier the gate stage sits after the target and would otherwise
+		// be cleared. startStage clears reworkTarget on the stage it (re)starts, so a
+		// running stage never carries a stale (e.g. self-pointing) target.
+		next = withStage(next, stage, { reworkTarget: target });
 		next = { ...next, stage: { ...next.stage, current: target } };
-		next = startStage(next, target, next.stage.stages[target].sessionFile);
 		return { progress: touch(next), outcome: { action: "rework", target } };
 	}
 

@@ -3,11 +3,12 @@
  * https://api.semanticscholar.org/api-docs/
  */
 
-import { fetchJson } from "./util.ts";
+import { fetchJson, HttpError } from "./util.ts";
 
 const API_BASE = "https://api.semanticscholar.org/graph/v1";
 
-const PAPER_FIELDS = "title,authors,abstract,year,venue,citationCount,externalIds,url,openAccessPdf,isOpenAccess,publicationTypes,journal";
+const PAPER_FIELDS =
+	"title,authors,abstract,year,venue,citationCount,externalIds,url,openAccessPdf,isOpenAccess,publicationTypes,journal";
 
 export interface S2Author {
 	name: string;
@@ -99,14 +100,37 @@ export async function searchPapers(options: {
 }
 
 export async function getPaper(id: string): Promise<PaperSummary | null> {
-	// id may be an S2 paperId, "DOI:...", "ARXIV:...", or a raw DOI/arxiv id.
-	let lookup = id.trim();
-	if (/^10\.\d{4,9}\/\S+$/i.test(lookup)) lookup = `DOI:${lookup}`;
-	else if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(lookup)) lookup = `ARXIV:${lookup}`;
+	// id may be an S2 paperId, "DOI:...", "ARXIV:...", "CorpusId:...", or a raw DOI/arxiv id.
+	const lookup = id.trim();
+	let structuredId: string | null = null;
+	if (/^DOI:/i.test(lookup) || /^10\.\d{4,9}\/\S+$/i.test(lookup)) {
+		structuredId = /^DOI:/i.test(lookup) ? lookup : `DOI:${lookup}`;
+	} else if (/^ARXIV:/i.test(lookup) || /^\d{4}\.\d{4,5}(v\d+)?$/.test(lookup)) {
+		structuredId = /^ARXIV:/i.test(lookup) ? lookup : `ARXIV:${lookup}`;
+	} else if (/^CorpusId:/i.test(lookup)) {
+		structuredId = lookup;
+	} else if (/^[0-9a-f]{40}$/i.test(lookup)) {
+		// S2 paperId is a 40-character hex string.
+		structuredId = lookup;
+	}
+
+	if (structuredId === null) {
+		// Not a recognized ID - the /paper/{id} endpoint only accepts structured
+		// IDs, so treat the input as a title and search for the top match.
+		const results = await searchPapers({ query: lookup, limit: 1 });
+		return results[0] ?? null;
+	}
+
 	try {
-		const paper = await fetchJson<S2Paper>(`${API_BASE}/paper/${encodeURIComponent(lookup)}?fields=${PAPER_FIELDS}`, { retries: 1 });
+		const paper = await fetchJson<S2Paper>(
+			`${API_BASE}/paper/${encodeURIComponent(structuredId)}?fields=${PAPER_FIELDS}`,
+			{ retries: 1 },
+		);
 		return toPaperSummary(paper, 0, 1);
-	} catch {
-		return null;
+	} catch (err) {
+		// Only a genuine 404 means "does not exist"; other errors (network,
+		// 5xx, rate limits) are transient and must surface to the caller.
+		if (err instanceof HttpError && err.status === 404) return null;
+		throw err;
 	}
 }

@@ -6,8 +6,8 @@
  * (via request_user_input) and the completion protocol (request_stage_review).
  */
 
-import type { StageId } from "./types.ts";
 import { STAGE_LABELS } from "./stage-machine.ts";
+import type { StageId } from "./types.ts";
 
 export interface StagePromptContext {
 	/** Research topic of the paper project. */
@@ -69,7 +69,7 @@ function literaturePrompt(ctx: StagePromptContext): string {
 	].join("\n");
 }
 
-function reproductionPrompt(ctx: StagePromptContext): string {
+function reproductionPrompt(_ctx: StagePromptContext): string {
 	return [
 		`# 阶段 2/${STAGE_LABELS.reproduction}:代码复现`,
 		"",
@@ -87,7 +87,7 @@ function reproductionPrompt(ctx: StagePromptContext): string {
 	].join("\n");
 }
 
-function improvementPrompt(ctx: StagePromptContext): string {
+function improvementPrompt(_ctx: StagePromptContext): string {
 	return [
 		`# 阶段 3/${STAGE_LABELS.improvement}:方法改进`,
 		"",
@@ -104,7 +104,7 @@ function improvementPrompt(ctx: StagePromptContext): string {
 	].join("\n");
 }
 
-function experimentPrompt(ctx: StagePromptContext): string {
+function experimentPrompt(_ctx: StagePromptContext): string {
 	return [
 		`# 阶段 4/${STAGE_LABELS.experiment}:实验执行`,
 		"",
@@ -122,7 +122,7 @@ function experimentPrompt(ctx: StagePromptContext): string {
 	].join("\n");
 }
 
-function writingPrompt(ctx: StagePromptContext): string {
+function writingPrompt(_ctx: StagePromptContext): string {
 	return [
 		`# 阶段 5/${STAGE_LABELS.writing}:论文撰写`,
 		"",
@@ -147,7 +147,44 @@ const STAGE_PROMPT_BUILDERS: Record<StageId, (ctx: StagePromptContext) => string
 	writing: writingPrompt,
 };
 
+/** Conventional artifact locations per stage, used to frame a rework iteration. */
+const STAGE_PRIOR_ARTIFACTS: Record<StageId, string> = {
+	literature: "literature/library.json、literature/survey.md、literature/notes/、literature/papers/",
+	reproduction: "code/baseline-*/、各 baseline 的 REPRODUCTION.md",
+	improvement: "code/our_method/METHOD.md、experiments/configs/experiment_plan.md",
+	experiment: "experiments/results/、experiments/figures/",
+	writing: "paper/manuscript.md、paper/references.bib、paper/output/",
+};
+
+/**
+ * Prompt for a rework iteration. Prior artifacts already exist, so lead with the
+ * feedback and instruct the agent to work incrementally rather than re-running the
+ * whole stage from scratch (mirroring buildResumeNudge). The rework reason is
+ * passed by the engine as ctx.notes.
+ */
+function buildReworkPrompt(stage: StageId, ctx: StagePromptContext): string {
+	const reason = ctx.notes?.trim() || "（未提供具体反馈）";
+	return [
+		`# 返工:${STAGE_LABELS[stage]}`,
+		"",
+		`这是「${STAGE_LABELS[stage]}」阶段的一次返工。研究主题:「${ctx.topic}」。`,
+		`该阶段此前的产物已经存在于项目目录中:${STAGE_PRIOR_ARTIFACTS[stage]}。`,
+		"先检查这些已有产物与当前进度,只针对下面的反馈做增量修改;不要重做仍然有效的工作(例如不要重新下载已有的 PDF、不要覆盖仍然正确的产物文件)。",
+		"",
+		"## 返工反馈",
+		reason,
+		"",
+		"完成必要的修改后,按工作协议调用 `request_stage_review` 重新登记产物(可复用已有产物路径,会作为新增修订)。",
+	].join("\n");
+}
+
 export function buildStagePrompt(stage: StageId, ctx: StagePromptContext): string {
+	// A rework reason is passed as ctx.notes; lead with a rework-aware nudge
+	// instead of the fresh-start step list so a literal agent does not redo the
+	// whole stage (re-downloading PDFs, overwriting good artifacts).
+	if (ctx.notes?.trim()) {
+		return `${buildReworkPrompt(stage, ctx)}${protocol({ ...ctx, notes: undefined })}`;
+	}
 	return `${STAGE_PROMPT_BUILDERS[stage](ctx)}${protocol(ctx)}`;
 }
 

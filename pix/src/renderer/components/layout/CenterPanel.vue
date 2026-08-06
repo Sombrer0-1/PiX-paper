@@ -15,6 +15,7 @@ import { computed, ref, watch, nextTick, onMounted } from "vue";
 import { useSessionStore } from "../../stores/session-store";
 import { useRpc } from "../../composables/useRpc";
 import { useProjectStore } from "../../stores/project-store";
+import { useCommandsStore } from "../../stores/commands-store";
 import SessionView from "../session/SessionView.vue";
 import RawOutputViewer from "../session/RawOutputViewer.vue";
 import SessionTreeView from "../session/SessionTreeView.vue";
@@ -34,6 +35,7 @@ const sessionStore = useSessionStore();
 const rpc = useRpc();
 const projectStore = useProjectStore();
 const settingsStore = useSettingsStore();
+const commandsStore = useCommandsStore();
 
 // Clarification props — driven by WorkspacePage's request_user_input handling
 const props = defineProps<{
@@ -114,6 +116,10 @@ const canSend = computed(() =>
   rpc.isConnected.value &&
   !isSending.value
 );
+// Mirrors CommandPalette's own results so we can detect when the open palette
+// is showing nothing. The palette renders nothing when results is empty, but
+// its window keydown capture listener stays mounted and swallows Enter (#C-ux-7).
+const commandPaletteHasResults = computed(() => commandsStore.searchCommands(searchQuery.value).length > 0);
 const isStreaming = computed(() => rpc.isStreaming.value);
 
 const statusText = computed(() => {
@@ -216,6 +222,14 @@ watch(
   },
   { deep: true }
 );
+
+// Close the command palette when its query yields no matches. With zero results
+// the palette renders nothing but its window keydown capture listener stays
+// active and swallows Enter, so the message can't be sent. Closing it unmounts
+// the palette (removing that listener), letting Enter reach the textarea (#C-ux-7).
+watch(commandPaletteHasResults, (has) => {
+  if (showCommandPalette.value && !has) showCommandPalette.value = false;
+});
 
 // Scroll to bottom on mount when there are existing blocks (e.g. navigating back from settings)
 onMounted(async () => {
@@ -337,7 +351,6 @@ function handleInput(e: Event): void {
 
 function handleKeydown(e: KeyboardEvent): void {
   if (e.key === "Enter" && !e.shiftKey) {
-    if (showCommandPalette.value) return;
     e.preventDefault();
     sendMessage();
   }

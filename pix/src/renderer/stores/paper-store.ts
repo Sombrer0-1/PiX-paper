@@ -137,6 +137,11 @@ export const usePaperStore = defineStore("paper", () => {
 		error.value = null;
 		if (projectChanged) {
 			autoStartDone.value = false;
+			// A clarification left open in the previous project must not leak into
+			// the new one (misrouted answers). Reset the user-input state.
+			pendingUserInput.value = null;
+			userInputAnswers.value = {};
+			currentQuestionIndex.value = 0;
 			loadUiState(snap.config.id);
 		}
 	}

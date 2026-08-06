@@ -14,7 +14,10 @@ export class HttpError extends Error {
 	}
 }
 
-export async function fetchJson<T>(url: string, options: { timeoutMs?: number; retries?: number; headers?: Record<string, string> } = {}): Promise<T> {
+export async function fetchJson<T>(
+	url: string,
+	options: { timeoutMs?: number; retries?: number; headers?: Record<string, string> } = {},
+): Promise<T> {
 	const { timeoutMs = 20_000, retries = 1, headers = {} } = options;
 	let lastError: unknown;
 	for (let attempt = 0; attempt <= retries; attempt++) {
@@ -33,24 +36,42 @@ export async function fetchJson<T>(url: string, options: { timeoutMs?: number; r
 			return (await response.json()) as T;
 		} catch (err) {
 			lastError = err;
-			if (err instanceof HttpError) throw err;
+			// 4xx (non-429) are not retryable; everything else (429, 5xx, network) is.
+			if (err instanceof HttpError && err.status !== 429 && err.status < 500) throw err;
 			if (attempt < retries) await sleep(1_000 * (attempt + 1));
 		}
 	}
 	throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-export async function fetchBinary(url: string, options: { timeoutMs?: number; headers?: Record<string, string> } = {}): Promise<Uint8Array> {
-	const { timeoutMs = 60_000, headers = {} } = options;
-	const response = await fetch(url, {
-		headers: { "User-Agent": USER_AGENT, ...headers },
-		signal: AbortSignal.timeout(timeoutMs),
-		redirect: "follow",
-	});
-	if (!response.ok) {
-		throw new HttpError(response.status, `GET ${url} failed with HTTP ${response.status}`);
+export async function fetchBinary(
+	url: string,
+	options: { timeoutMs?: number; retries?: number; headers?: Record<string, string> } = {},
+): Promise<Uint8Array> {
+	const { timeoutMs = 60_000, retries = 1, headers = {} } = options;
+	let lastError: unknown;
+	for (let attempt = 0; attempt <= retries; attempt++) {
+		try {
+			const response = await fetch(url, {
+				headers: { "User-Agent": USER_AGENT, ...headers },
+				signal: AbortSignal.timeout(timeoutMs),
+				redirect: "follow",
+			});
+			if (response.status === 429 && attempt < retries) {
+				await sleep(2_500);
+				continue;
+			}
+			if (!response.ok) {
+				throw new HttpError(response.status, `GET ${url} failed with HTTP ${response.status}`);
+			}
+			return new Uint8Array(await response.arrayBuffer());
+		} catch (err) {
+			lastError = err;
+			if (err instanceof HttpError && err.status !== 429 && err.status < 500) throw err;
+			if (attempt < retries) await sleep(1_000 * (attempt + 1));
+		}
 	}
-	return new Uint8Array(await response.arrayBuffer());
+	throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -76,9 +97,52 @@ export function splitSentences(text: string): string[] {
 }
 
 const STOP_WORDS = new Set([
-	"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "by", "is", "are", "was", "were", "be", "been",
-	"we", "our", "this", "that", "these", "those", "it", "its", "as", "at", "from", "into", "via", "using", "use", "used",
-	"can", "could", "may", "might", "show", "shows", "shown", "propose", "proposed", "present", "presented", "based",
+	"the",
+	"a",
+	"an",
+	"and",
+	"or",
+	"of",
+	"to",
+	"in",
+	"on",
+	"for",
+	"with",
+	"by",
+	"is",
+	"are",
+	"was",
+	"were",
+	"be",
+	"been",
+	"we",
+	"our",
+	"this",
+	"that",
+	"these",
+	"those",
+	"it",
+	"its",
+	"as",
+	"at",
+	"from",
+	"into",
+	"via",
+	"using",
+	"use",
+	"used",
+	"can",
+	"could",
+	"may",
+	"might",
+	"show",
+	"shows",
+	"shown",
+	"propose",
+	"proposed",
+	"present",
+	"presented",
+	"based",
 ]);
 
 export function keywordsOf(text: string): string[] {

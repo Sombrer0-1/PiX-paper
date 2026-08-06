@@ -483,11 +483,14 @@ export class RpcClient {
 		try {
 			const data = JSON.parse(line);
 
-			// Check if it's a response to a pending request
-			if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
-				const pending = this.pendingRequests.get(data.id)!;
-				this.pendingRequests.delete(data.id);
-				pending.resolve(data as RpcResponse);
+			// Responses are only for pending requests; drop unmatched responses
+			// (e.g. after timeout or process exit) instead of forwarding them to event listeners.
+			if (data.type === "response") {
+				if (data.id && this.pendingRequests.has(data.id)) {
+					const pending = this.pendingRequests.get(data.id)!;
+					this.pendingRequests.delete(data.id);
+					pending.resolve(data as RpcResponse);
+				}
 				return;
 			}
 

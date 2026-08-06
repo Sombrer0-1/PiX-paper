@@ -10,7 +10,7 @@
 import { existsSync, rmSync } from "fs";
 import { isAbsolute, join, relative, resolve } from "path";
 import { BrowserWindow, Notification, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
-import { SessionManager, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { SessionManager, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { STAGE_LABELS } from "pi-paper-workflow";
 import type { InboxItemKind } from "pi-paper-workflow";
 import electronUpdater from "electron-updater";
@@ -241,7 +241,25 @@ export function getCurrentStageEngine(): StageEngine | null {
 
 function isPathInsideDirectory(candidatePath: string, directoryPath: string): boolean {
   const relativePath = relative(directoryPath, candidatePath);
-  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  // Strict containment: the directory itself (relativePath === "") is rejected
+  // so passing the sessions directory as the session path cannot wipe it.
+  return relativePath !== "" && !relativePath.startsWith("..") && !isAbsolute(relativePath);
+}
+
+/**
+ * Resolve the configured session directory the same way SessionBridge does
+ * (via SettingsManager.getSessionDir()), so list/delete honor a custom
+ * sessionDir instead of always assuming the default ~/.pi/agent/sessions.
+ * `cwd` is the project directory for list-sessions; pass the agent dir to read
+ * only the global setting for delete-session (which has no project context).
+ */
+function resolveConfiguredSessionDir(cwd: string): string | undefined {
+  try {
+    return SettingsManager.create(cwd).getSessionDir();
+  } catch (err) {
+    console.error("[ipc] Failed to resolve configured session dir:", err);
+    return undefined;
+  }
 }
 
 export function registerIpcHandlers(
@@ -322,7 +340,24 @@ export function registerIpcHandlers(
         console.error("[ipc] Failed to refresh paper MCP config:", err);
       }
       await sessionBridge.start(projectDir, settingsStore.getAll());
-      await stageEngine.load();
+      try {
+        await stageEngine.load();
+      } catch (loadErr) {
+        // load() failed after the session started: dispose the new engine and
+        // clear any stale engine bound to the previous project so agent_end
+        // events from this session are not routed to the old engine, and no
+        // orphaned engine/agent remains (design §4.2).
+        try {
+          stageEngine.dispose();
+        } catch (disposeErr) {
+          console.error("[ipc] Error disposing failed stage engine:", disposeErr);
+        }
+        setCurrentStageEngine(null, () => currentWindow);
+        return {
+          success: false,
+          error: loadErr instanceof Error ? loadErr.message : String(loadErr),
+        };
+      }
       setCurrentStageEngine(stageEngine, () => currentWindow);
       return { success: true, isPaper: true };
     } catch (err: unknown) {
@@ -376,7 +411,8 @@ export function registerIpcHandlers(
 
   ipcMain.handle("list-sessions", async (_event, projectDir: string) => {
     try {
-      const sessions = await SessionManager.list(projectDir);
+      const sessionDir = resolveConfiguredSessionDir(projectDir);
+      const sessions = await SessionManager.list(projectDir, sessionDir);
       return sessions.map((session) => ({
         path: session.path,
         id: session.id,
@@ -487,7 +523,23 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle("install-update", () => {
+    // Refuse to quit-and-install while a session is running: doing so mid-turn
+    // can corrupt the in-memory session state. The renderer fires installUpdate
+    // without awaiting its result, so surface the block via a notification.
+    if (sessionBridge.isRunning()) {
+      const message = "有会话正在运行，请先停止会话再安装更新。";
+      console.warn("[ipc] install-update blocked: a session is running");
+      try {
+        if (Notification.isSupported()) {
+          new Notification({ title: "PiX-paper 更新已推迟", body: message }).show();
+        }
+      } catch (err) {
+        console.error("[ipc] Failed to show install-update blocked notification:", err);
+      }
+      return { success: false, error: message };
+    }
     autoUpdater.quitAndInstall();
+    return { success: true };
   });
 
   // =========================================================================
@@ -538,10 +590,16 @@ export function registerIpcHandlers(
   ipcMain.handle("delete-session", async (_event, sessionPath: string) => {
     try {
       const resolved = resolve(sessionPath);
-      // Guard: only delete session files, never arbitrary paths
-      const agentDir = resolve(getAgentDir());
-      const sessionsDir = resolve(join(agentDir, "sessions"));
-      if (!isPathInsideDirectory(resolved, sessionsDir)) {
+      // Guard: only delete session files, never arbitrary paths. Resolve the
+      // allowed session directories the same way SessionBridge does (via
+      // SettingsManager.getSessionDir()), so a custom sessionDir does not break
+      // deletion. The default ~/.pi/agent/sessions dir is always allowed.
+      const allowedDirs = [resolve(join(getAgentDir(), "sessions"))];
+      const configuredSessionDir = resolveConfiguredSessionDir(getAgentDir());
+      if (configuredSessionDir) {
+        allowedDirs.push(resolve(configuredSessionDir));
+      }
+      if (!allowedDirs.some((dir) => isPathInsideDirectory(resolved, dir))) {
         return { success: false, error: "Invalid session path" };
       }
       if (existsSync(resolved)) {
@@ -752,7 +810,7 @@ export function setupEventForwarding(
     // Route agent_end to the stage engine so it can auto-load the next stage
     // after a gate decision (design §4.2).
     if (event.type === "agent_end" && currentStageEngine) {
-      currentStageEngine.onAgentEnd().catch((err) => {
+      currentStageEngine.onAgentEnd(event).catch((err) => {
         console.error("[ipc] StageEngine.onAgentEnd failed:", err);
         const w = getWin();
         if (w && !w.isDestroyed()) {

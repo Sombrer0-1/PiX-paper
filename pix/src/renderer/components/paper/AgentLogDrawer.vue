@@ -60,12 +60,7 @@ async function sendMessage(): Promise<void> {
 	try {
 		optimisticId = sessionStore.appendOptimisticUserMessage(message);
 		const type = isStreaming.value ? "steer" : "prompt";
-		await rpc.sendCommandAsync({ type, message }).then((result) => {
-			if (!result.success) throw new Error(result.error ?? "消息发送失败");
-		}).catch((error) => {
-			sessionStore.failOptimisticUserMessage(optimisticId, sendError(error));
-			if (!draft.value.trim()) draft.value = message;
-		});
+		await rpc.sendCommandAsync({ type, message });
 		draft.value = "";
 		if (textareaRef.value) {
 			textareaRef.value.value = "";
@@ -202,6 +197,8 @@ function isAgentMessage(block: DisplayBlock): block is Extract<DisplayBlock, { t
 }
 
 .drawer-body {
+	display: flex;
+	flex-direction: column;
 	min-height: 0;
 	flex: 1;
 	overflow: hidden;
@@ -209,7 +206,8 @@ function isAgentMessage(block: DisplayBlock): block is Extract<DisplayBlock, { t
 }
 
 .log-scroll {
-	height: 100%;
+	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 	padding: 18px 18px 26px;
 }
@@ -224,7 +222,7 @@ function isAgentMessage(block: DisplayBlock): block is Extract<DisplayBlock, { t
 	justify-content: center;
 	flex-direction: column;
 	gap: 8px;
-	height: 100%;
+	flex: 1;
 	min-height: 260px;
 	padding: 24px;
 	color: var(--pix-text-muted);

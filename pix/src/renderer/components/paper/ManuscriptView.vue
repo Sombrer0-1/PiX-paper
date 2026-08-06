@@ -27,6 +27,14 @@ const manuscriptContent = ref<PaperArtifactContent | null>(null);
 const literatureEntries = ref<LiteratureEntry[]>([]);
 const imageSources = ref<Map<string, string>>(new Map());
 const citationKeys = computed(() => new Set(literatureEntries.value.map((entry) => citationKey(entry))));
+const citedKeys = computed(() => {
+	const text = manuscriptContent.value?.content ?? "";
+	const keys = new Set<string>();
+	const pattern = /\[@([A-Za-z0-9][A-Za-z0-9_.:-]*)\]/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) keys.add(match[1]);
+	return keys;
+});
 const loading = ref(false);
 const loadError = ref<string | null>(null);
 let loadToken = 0;
@@ -142,9 +150,9 @@ function openReference(entry: LiteratureEntry): void {
 				</div>
 			</main>
 			<aside class="support-rail">
-				<section v-if="literatureEntries.length > 0" class="support-section citation-section"><div class="section-label">参考文献</div><h3>{{ literatureEntries.length }} 条可跳转引用</h3><button v-for="entry in literatureEntries.slice(0, 12)" :id="`reference-${encodeURIComponent(citationKey(entry))}`" :key="citationKey(entry)" type="button" class="support-item" @click="openReference(entry)"><span class="citation-key">[{{ citationKey(entry) }}]</span><span><strong>{{ entry.title ?? "未命名论文" }}</strong><small>{{ entry.authors.join(", ") || "作者未知" }}<span v-if="entry.year"> · {{ entry.year }}</span></small></span><span class="mdi mdi-arrow-down-left" aria-hidden="true"></span></button></section>
-				<section class="support-section"><div class="section-label">论文证据</div><h3>{{ references.length }} 个文献产物</h3><button v-for="artifact in references.slice(0, 5)" :key="artifact.id" type="button" class="support-item" @click="openArtifact(artifact.id)"><span class="mdi mdi-book-open-outline" aria-hidden="true"></span><span><strong>{{ artifactName(artifact.path) }}</strong><small>{{ artifactTypeLabel(artifact.type) }}</small></span><span class="mdi mdi-chevron-right" aria-hidden="true"></span></button><div v-if="references.length === 0" class="support-empty">文献产物会显示在这里。</div></section>
-				<section class="support-section"><div class="section-label">内联图表</div><h3>{{ figures.length }} 个图表产物</h3><button v-for="artifact in figures.slice(0, 5)" :key="artifact.id" type="button" class="support-item" @click="openArtifact(artifact.id)"><span class="mdi mdi-chart-box-outline" aria-hidden="true"></span><span><strong>{{ artifactName(artifact.path) }}</strong><small>{{ artifact.metadata?.caption ? String(artifact.metadata.caption) : '未提供 caption' }}</small></span><span class="mdi mdi-chevron-right" aria-hidden="true"></span></button><div v-if="figures.length === 0" class="support-empty">实验图表会显示在这里。</div></section>
+				<section v-if="literatureEntries.length > 0" class="support-section citation-section"><div class="section-label">参考文献</div><h3>{{ literatureEntries.length }} 条可跳转引用</h3><div class="support-list"><button v-for="entry in literatureEntries" :id="`reference-${encodeURIComponent(citationKey(entry))}`" :key="citationKey(entry)" type="button" class="support-item" :class="{ 'support-item-disabled': !citedKeys.has(citationKey(entry)) }" :disabled="!citedKeys.has(citationKey(entry))" :title="citedKeys.has(citationKey(entry)) ? '跳转到正文引用' : '未在正文中引用'" @click="openReference(entry)"><span class="citation-key">[{{ citationKey(entry) }}]</span><span><strong>{{ entry.title ?? "未命名论文" }}</strong><small>{{ entry.authors.join(", ") || "作者未知" }}<span v-if="entry.year"> · {{ entry.year }}</span></small></span><span class="mdi mdi-arrow-down-left" aria-hidden="true"></span></button></div></section>
+				<section class="support-section"><div class="section-label">论文证据</div><h3>{{ references.length }} 个文献产物</h3><div class="support-list"><button v-for="artifact in references" :key="artifact.id" type="button" class="support-item" @click="openArtifact(artifact.id)"><span class="mdi mdi-book-open-outline" aria-hidden="true"></span><span><strong>{{ artifactName(artifact.path) }}</strong><small>{{ artifactTypeLabel(artifact.type) }}</small></span><span class="mdi mdi-chevron-right" aria-hidden="true"></span></button></div><div v-if="references.length === 0" class="support-empty">文献产物会显示在这里。</div></section>
+				<section class="support-section"><div class="section-label">内联图表</div><h3>{{ figures.length }} 个图表产物</h3><div class="support-list"><button v-for="artifact in figures" :key="artifact.id" type="button" class="support-item" @click="openArtifact(artifact.id)"><span class="mdi mdi-chart-box-outline" aria-hidden="true"></span><span><strong>{{ artifactName(artifact.path) }}</strong><small>{{ artifact.metadata?.caption ? String(artifact.metadata.caption) : '未提供 caption' }}</small></span><span class="mdi mdi-chevron-right" aria-hidden="true"></span></button></div><div v-if="figures.length === 0" class="support-empty">实验图表会显示在这里。</div></section>
 				<section class="support-section manuscript-note"><span class="mdi mdi-link-variant" aria-hidden="true"></span><p>引用和图表的联动依赖 agent 在产物注册时提供关系信息。当前没有关系时，仍可从支撑面板打开对应产物。</p></section>
 				<ArtifactRelationsPanel v-if="manuscript" :artifact="manuscript" :artifacts="paperStore.artifacts" compact @open-artifact="openArtifact" />
 			</aside>
@@ -436,6 +444,23 @@ h1 {
 
 .support-item:hover {
 	color: var(--pix-accent);
+}
+
+.support-list {
+	max-height: 240px;
+	overflow-y: auto;
+}
+
+.support-item:disabled,
+.support-item.support-item-disabled {
+	color: var(--pix-text-muted);
+	cursor: default;
+	opacity: 0.55;
+}
+
+.support-item:disabled:hover,
+.support-item.support-item-disabled:hover {
+	color: var(--pix-text-muted);
 }
 
 .support-item > span:nth-child(2) {

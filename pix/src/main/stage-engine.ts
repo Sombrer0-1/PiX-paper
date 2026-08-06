@@ -15,6 +15,8 @@
  * gate / progress-changed events that paper-rpc forwards to the renderer.
  */
 
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Type } from "typebox";
 import type {
 	AgentToolResult,
@@ -36,6 +38,7 @@ import {
 	type PaperProjectConfig,
 	type QualityCheckItem,
 	type StageId,
+	STAGE_IDS,
 	STAGE_LABELS,
 	applyGateDecision,
 	buildResumeNudge,
@@ -114,7 +117,10 @@ export class StageEngine {
 	} | null = null;
 	/** Stage to auto-load once the current agent turn ends (set by respondGate). */
 	private _pendingStart: { stage: StageId; notes?: string; fork?: boolean } | null = null;
+	/** Unsubscribe handle for the bridge event subscription set up in load(). */
+	private _unsubscribeAgentEvents: (() => void) | null = null;
 	private _inboxMutation: Promise<void> = Promise.resolve();
+	private _persistMutation: Promise<void> = Promise.resolve();
 	private _listeners: StageEngineListeners = {
 		onGateRequest: () => {},
 		onProgressChanged: () => {},
@@ -133,11 +139,41 @@ export class StageEngine {
 
 	/** Load config + progress from disk. Safe to call on startup or reconnect. */
 	async load(): Promise<void> {
+		this._subscribeBridgeEvents();
 		this._config = await loadPaperConfig(this._projectDir);
 		this._progress = await loadPaperProgress(this._projectDir);
 		this._inbox = await loadPaperInbox(this._projectDir, this._config.id);
+		// Read the persisted pending-advance intent before reconcile so we can tell
+		// whether its target was already started (running) prior to this restart.
+		const persistedPendingStart = await this._loadPendingStart();
+		const targetWasRunning = persistedPendingStart !== null &&
+			this._progress.stage.stages[persistedPendingStart.stage].status === "running";
+		this._reconcileRunningStages();
 		await this._ensurePersistedGateInbox();
 		await this._persist();
+		// Reconcile a pending advance that survived a restart (gap3): if the
+		// target was already running before the restart, the advance was already
+		// applied and the persisted intent is stale; otherwise apply it now when
+		// the session is idle, or leave it for the next agent_end.
+		if (persistedPendingStart !== null) {
+			if (targetWasRunning) {
+				this._pendingStart = null;
+				await this._savePendingStart();
+			} else {
+				this._pendingStart = persistedPendingStart;
+				if (!this._bridge.isStreaming()) {
+					try {
+						await this.onAgentEnd();
+					} catch (err) {
+						// A failed reconcile must not brick the project: drop the intent
+						// and let the user advance manually.
+						console.error("[StageEngine] Failed to apply persisted pending start:", err);
+						this._pendingStart = null;
+						await this._savePendingStart();
+					}
+				}
+			}
+		}
 	}
 
 	get config(): PaperProjectConfig {
@@ -182,12 +218,21 @@ export class StageEngine {
 		if (!check.ok) {
 			throw new Error(check.reason ?? `Cannot start stage ${stage}`);
 		}
+		const previous = this._progress as PaperProgress;
 		this._progress = startStage(this._progress as PaperProgress, stage, opts?.sessionFile);
 		await this._persist();
 
 		const ctx = { topic: this.config.topic, projectDir: this._projectDir, notes: opts?.notes };
 		const prompt = opts?.resume ? buildResumeNudge(stage, ctx) : buildStagePrompt(stage, ctx);
-		await this._bridge.prompt(prompt);
+		try {
+			await this._bridge.prompt(prompt);
+		} catch (err) {
+			// The prompt never reached the agent: roll the running transition back
+			// to the prior state instead of leaving a phantom running stage.
+			this._progress = previous;
+			await this._persist();
+			throw err;
+		}
 	}
 
 	async pauseStage(stage: StageId, reason?: string): Promise<void> {
@@ -212,6 +257,23 @@ export class StageEngine {
 	}
 
 	/**
+	 * Transition the current running stage to a recoverable "paused" state, used
+	 * when the agent cannot make progress (e.g. auto_retry_end with
+	 * success=false) so the stage is not stuck "running" forever; the user can
+	 * then resume it. Called internally from the bridge event subscription set up
+	 * in load(); paper-rpc/ipc-handlers may also invoke it for other fatal
+	 * agent-error paths.
+	 */
+	async markCurrentStageRecoverable(reason?: string): Promise<void> {
+		this._requireLoaded();
+		const progress = this._progress as PaperProgress;
+		const current = progress.stage.current;
+		if (progress.stage.stages[current].status !== "running") return;
+		this._progress = pauseStage(progress, current, reason ?? "agent failed to complete");
+		await this._persist();
+	}
+
+	/**
 	 * Called from the request_stage_review tool execute closure. Registers
 	 * declared artifacts, runs quality checks, fires the gate, and resolves to
 	 * the human gate decision (which the tool returns to the agent).
@@ -230,7 +292,14 @@ export class StageEngine {
 			normalized,
 			"agent",
 		);
-		this._progress = await captureArtifactRevisions(this._projectDir, this._progress);
+		const captured = await captureArtifactRevisions(this._projectDir, this._progress as PaperProgress);
+		// captureArtifactRevisions ran on the pre-await snapshot. Re-merge its
+		// revision updates onto the latest _progress so a concurrent stage mutation
+		// (pause/start) during the await is not clobbered when requestGate runs.
+		this._progress = {
+			...(this._progress as PaperProgress),
+			artifactRevisions: captured.artifactRevisions,
+		};
 		const artifacts = getStageArtifacts(this._progress as PaperProgress, stage);
 		const checks = runQualityChecks(stage, artifacts, summary);
 		const gate: GateRequest = {
@@ -262,11 +331,15 @@ export class StageEngine {
 		const gateId = this._pendingGate?.gate.id ?? this._progress?.pendingGate?.id;
 		const { progress, outcome } = applyGateDecision(this._progress as PaperProgress, decision);
 		this._progress = progress;
-		await this._persist();
-
-		// Let the request_stage_review tool call return the decision to the agent.
+		// Resolve the gate promise before persisting so a persist failure cannot
+		// strand the agent inside request_stage_review forever.
 		this._pendingGate?.resolve(decision);
 		this._pendingGate = null;
+		try {
+			await this._persist();
+		} catch (err) {
+			console.error("[StageEngine] persist after gate decision failed:", err);
+		}
 		if (gateId) await this._resolveGateInbox(gateId);
 
 		// Schedule the next stage prompt; it is sent once the agent turn ends
@@ -279,6 +352,9 @@ export class StageEngine {
 			this._pendingStart = { stage: outcome.target, notes: decision.reason, fork: true };
 		}
 		// abort: nothing to schedule.
+		// Persist the pending-advance intent so a restart does not orphan it
+		// (gap3); onAgentEnd clears it once the advance is applied.
+		await this._savePendingStart();
 		// A persisted gate is resolved after the application has restarted, so
 		// there may be no future agent_end event to release the queued stage.
 		// Keep the event-driven path for an active turn, but start it now when the
@@ -292,11 +368,28 @@ export class StageEngine {
 	 * Called by paper-rpc when SessionBridge emits agent_end. If a stage was
 	 * scheduled by a prior gate decision, send its prompt now. For rework, fork
 	 * a new session branch first so the original session is preserved.
+	 *
+	 * Retryable agent_end events (willRetry) are ignored: the agent will auto-
+	 * retry, and only the final settling agent_end should advance the stage.
 	 */
-	async onAgentEnd(): Promise<void> {
+	async onAgentEnd(event?: { willRetry?: boolean }): Promise<void> {
+		if (event?.willRetry) return;
 		const start = this._pendingStart;
-		this._pendingStart = null;
 		if (!start) return;
+		// If the session has not started yet (e.g. a restored gate resolved right
+		// after restart, before the bridge is ready), defer the advance instead of
+		// throwing inside startStage -> bridge.prompt. _pendingStart stays pending.
+		if (!this._bridge.isRunning()) return;
+		// The target stage is already running: the pending advance was already
+		// applied (e.g. partially before a crash). Drop the stale intent instead
+		// of re-prompting the agent.
+		if (this._progress?.stage.stages[start.stage].status === "running") {
+			this._pendingStart = null;
+			await this._savePendingStart();
+			return;
+		}
+		this._pendingStart = null;
+		await this._savePendingStart();
 		let sessionFile: string | undefined;
 		if (start.fork) {
 			try {
@@ -321,12 +414,49 @@ export class StageEngine {
 		this._pendingGate?.reject(new Error("StageEngine disposed"));
 		this._pendingGate = null;
 		this._pendingStart = null;
+		this._unsubscribeAgentEvents?.();
+		this._unsubscribeAgentEvents = null;
 	}
 
 	private _requireLoaded(): void {
 		if (!this._config || !this._progress) {
 			throw new Error("StageEngine not loaded. Call load() first.");
 		}
+	}
+
+	/**
+	 * After a fresh start no agent is active, so any stage left "running" in the
+	 * manifest is stale (a crash/restart mid-turn). Reconcile it to "paused" so
+	 * the user can resume rather than the stage being stuck running forever.
+	 */
+	private _reconcileRunningStages(): void {
+		if (!this._progress) return;
+		const stages = this._progress.stage.stages;
+		let next = this._progress;
+		for (const id of STAGE_IDS) {
+			if (stages[id].status === "running") {
+				next = pauseStage(next, id, "recovered after restart");
+			}
+		}
+		this._progress = next;
+	}
+
+	/**
+	 * Subscribe to SessionBridge agent events so the engine can react to live
+	 * agent failures: on auto_retry_end with success=false it transitions the
+	 * current running stage to a recoverable "paused" state instead of leaving it
+	 * stuck "running" until a restart (A1-ux-4). Idempotent: re-subscribing
+	 * cleans up the previous subscription.
+	 */
+	private _subscribeBridgeEvents(): void {
+		this._unsubscribeAgentEvents?.();
+		this._unsubscribeAgentEvents = this._bridge.onEvent((event) => {
+			if (event.type === "auto_retry_end" && !event.success) {
+				this.markCurrentStageRecoverable(event.finalError ?? "agent retry failed").catch((err) => {
+					console.error("[StageEngine] markCurrentStageRecoverable failed:", err);
+				});
+			}
+		});
 	}
 
 	private async _ensurePersistedGateInbox(): Promise<void> {
@@ -438,10 +568,61 @@ export class StageEngine {
 		await next;
 	}
 
-	private async _persist(): Promise<void> {
-		if (!this._progress) return;
-		await savePaperProgress(this._projectDir, this._progress);
-		this._listeners.onProgressChanged(this._progress, this.config);
+	private _persist(): Promise<void> {
+		if (!this._progress) return Promise.resolve();
+		// Serialize progress writes via a promise-chain mutex (mirroring
+		// _queueInboxMutation) so concurrent/interleaved writes do not corrupt
+		// the manifest. The atomic save itself lives in paper-project.ts.
+		const progress = this._progress;
+		const config = this._config as PaperProjectConfig;
+		const operation = async (): Promise<void> => {
+			await savePaperProgress(this._projectDir, progress);
+			this._listeners.onProgressChanged(progress, config);
+		};
+		const next = this._persistMutation.then(operation);
+		this._persistMutation = next.catch(() => {});
+		return next;
+	}
+
+	/**
+	 * Persist (or clear) the pending-advance intent to a sidecar file in .pp/ so
+	 * a restart does not orphan a scheduled advance/rework (gap3). Best-effort:
+	 * a write/delete failure only risks the orphaned-advance scenario, it never
+	 * corrupts the progress manifest.
+	 */
+	private async _savePendingStart(): Promise<void> {
+		const filePath = join(this._projectDir, ".pp", "pending-start.json");
+		try {
+			if (this._pendingStart) {
+				await mkdir(join(this._projectDir, ".pp"), { recursive: true });
+				await writeFile(filePath, JSON.stringify(this._pendingStart, null, 2), "utf8");
+			} else {
+				await rm(filePath, { force: true });
+			}
+		} catch (err) {
+			console.error("[StageEngine] Failed to persist pending start intent:", err);
+		}
+	}
+
+	/**
+	 * Read and validate the persisted pending-advance intent (gap3). Returns null
+	 * when the sidecar is absent or malformed.
+	 */
+	private async _loadPendingStart(): Promise<{ stage: StageId; notes?: string; fork?: boolean } | null> {
+		const filePath = join(this._projectDir, ".pp", "pending-start.json");
+		try {
+			const parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+			const obj = parsed as Record<string, unknown>;
+			if (!isStageId(obj.stage)) return null;
+			return {
+				stage: obj.stage,
+				notes: typeof obj.notes === "string" ? obj.notes : undefined,
+				fork: obj.fork === true ? true : undefined,
+			};
+		} catch {
+			return null;
+		}
 	}
 
 	private _requestStageReviewTool(): ToolDefinition<typeof requestStageReviewSchema, GateDecision> {

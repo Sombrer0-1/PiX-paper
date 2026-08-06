@@ -159,7 +159,16 @@ export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl
 
 			// The segment remains logically atomic for cursor
 			// movement / editing — the split is purely visual for word-wrap layout.
-			const subChunks = wordWrapLine(grapheme, maxWidth);
+			// If the segment is itself a single grapheme that cannot be split
+			// further (e.g. a wide CJK char or emoji that is one grapheme but
+			// wider than maxWidth), force-break by emitting it as its own
+			// overflowing chunk instead of recursing, which would loop forever.
+			let subChunks: TextChunk[];
+			if ([...graphemeSegmenter.segment(grapheme)].length === 1) {
+				subChunks = [{ text: grapheme, startIndex: 0, endIndex: grapheme.length }];
+			} else {
+				subChunks = wordWrapLine(grapheme, maxWidth);
+			}
 			for (let j = 0; j < subChunks.length - 1; j++) {
 				const sc = subChunks[j]!;
 				chunks.push({ text: sc.text, startIndex: charIndex + sc.startIndex, endIndex: charIndex + sc.endIndex });
@@ -266,6 +275,8 @@ export class Editor implements Component, Focusable {
 	// Prompt history for up/down navigation
 	private history: string[] = [];
 	private historyIndex: number = -1; // -1 = not browsing, 0 = most recent, 1 = older, etc.
+	// Draft captured when entering history browsing, restored when returning to "current" (-1).
+	private historyDraft: string | null = null;
 
 	// Kill ring for Emacs-style kill/yank operations
 	private killRing = new KillRing();
@@ -381,14 +392,17 @@ export class Editor implements Component, Focusable {
 
 		// Capture state when first entering history browsing mode
 		if (this.historyIndex === -1 && newIndex >= 0) {
+			this.historyDraft = this.getText();
 			this.pushUndoSnapshot();
 		}
 
 		this.historyIndex = newIndex;
 
 		if (this.historyIndex === -1) {
-			// Returned to "current" state - clear editor
-			this.setTextInternal("");
+			// Returned to "current" state - restore the draft captured on entry
+			// instead of clearing to empty (which would lose in-progress input).
+			this.setTextInternal(this.historyDraft ?? "");
+			this.historyDraft = null;
 		} else {
 			this.setTextInternal(this.history[this.historyIndex] || "");
 		}
@@ -2091,7 +2105,9 @@ export class Editor implements Component, Focusable {
 	): Promise<void> {
 		const previousTask = this.autocompleteRequestTask;
 		this.autocompleteRequestTask = (async () => {
-			await previousTask;
+			// Swallow rejections from a previous task so a single failure does
+			// not cascade into every subsequent autocomplete request.
+			await previousTask.catch(() => {});
 			if (startToken !== this.autocompleteStartToken || !this.autocompleteProvider) {
 				return;
 			}
@@ -2103,7 +2119,19 @@ export class Editor implements Component, Focusable {
 			const snapshotLine = this.state.cursorLine;
 			const snapshotCol = this.state.cursorCol;
 
-			await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			try {
+				await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			} catch {
+				// Cancel gracefully on error. The IIFE resolves (never rejects)
+				// so autocompleteRequestTask never holds a rejected promise and
+				// a single failure does not cascade to subsequent requests.
+				if (this.autocompleteAbort === controller) {
+					this.autocompleteAbort = undefined;
+				}
+				if (startToken === this.autocompleteStartToken) {
+					this.cancelAutocomplete();
+				}
+			}
 		})();
 		await this.autocompleteRequestTask;
 	}

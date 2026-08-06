@@ -56,6 +56,16 @@ export class Loader extends Text {
 		}
 	}
 
+	/**
+	 * Release the animation interval. Mirrors CancellableLoader so callers have
+	 * a uniform cleanup path; also invoked automatically by Container.removeChild
+	 * / clear via the Component.dispose lifecycle hook, preventing a Loader
+	 * removed from its parent from firing requestRender forever.
+	 */
+	dispose(): void {
+		this.stop();
+	}
+
 	setMessage(message: string): void {
 		this.message = message;
 		this.updateDisplay();

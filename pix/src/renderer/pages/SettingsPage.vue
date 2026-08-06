@@ -219,10 +219,10 @@ function applyPiSettings(s: Record<string, unknown>): void {
   shellCommandPrefix.value = (s.shellCommandPrefix ?? "") as string;
   if (s.npmCommand && Array.isArray(s.npmCommand)) npmCommand.value = s.npmCommand.join(" ");
   httpIdleTimeoutMs.value = (s.httpIdleTimeoutMs ?? 0) as number;
-  if (s.extensionPaths && Array.isArray(s.extensionPaths)) extensionPaths.value = s.extensionPaths.join(", ");
-  if (s.skillPaths && Array.isArray(s.skillPaths)) skillPaths.value = s.skillPaths.join(", ");
-  if (s.promptTemplatePaths && Array.isArray(s.promptTemplatePaths)) promptTemplatePaths.value = s.promptTemplatePaths.join(", ");
-  if (s.themePaths && Array.isArray(s.themePaths)) themePaths.value = s.themePaths.join(", ");
+  if (s.extensions && Array.isArray(s.extensions)) extensionPaths.value = s.extensions.join(", ");
+  if (s.skills && Array.isArray(s.skills)) skillPaths.value = s.skills.join(", ");
+  if (s.prompts && Array.isArray(s.prompts)) promptTemplatePaths.value = s.prompts.join(", ");
+  if (s.themes && Array.isArray(s.themes)) themePaths.value = s.themes.join(", ");
   enableSkillCommands.value = (s.enableSkillCommands ?? true) as boolean;
   autocompleteMaxVisible.value = (s.autocompleteMaxVisible ?? 5) as number;
 }

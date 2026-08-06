@@ -151,7 +151,22 @@ async function loadJsonlStorage(
 	const entries: SessionTreeEntry[] = [];
 	let leafId: string | null = null;
 	for (let i = 1; i < lines.length; i++) {
-		const entry = parseEntryLine(lines[i]!, filePath, i + 1);
+		const line = lines[i]!;
+		const lineNumber = i + 1;
+		const isLastLine = i === lines.length - 1;
+		let entry: SessionTreeEntry;
+		try {
+			entry = parseEntryLine(line, filePath, lineNumber);
+		} catch (error) {
+			if (isLastLine) {
+				console.warn(
+					`Session ${filePath}: ignoring unparseable last line ${lineNumber} (likely interrupted write): ${toError(error).message}`,
+				);
+				break;
+			}
+			console.warn(`Session ${filePath}: skipping malformed entry on line ${lineNumber}: ${toError(error).message}`);
+			continue;
+		}
 		entries.push(entry);
 		leafId = leafIdAfterEntry(entry);
 	}

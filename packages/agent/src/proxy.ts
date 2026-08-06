@@ -179,6 +179,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 			reader = response.body!.getReader();
 			const decoder = new TextDecoder();
 			let buffer = "";
+			let terminalReceived = false;
 
 			while (true) {
 				const { done, value } = await reader.read();
@@ -200,6 +201,9 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 							const event = processProxyEvent(proxyEvent, partial);
 							if (event) {
 								stream.push(event);
+								if (event.type === "done" || event.type === "error") {
+									terminalReceived = true;
+								}
 							}
 						}
 					}
@@ -208,6 +212,16 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 
 			if (options.signal?.aborted) {
 				throw new Error("Request aborted by user");
+			}
+
+			if (!terminalReceived) {
+				partial.stopReason = "error";
+				partial.errorMessage = "Proxy stream closed without a terminal event";
+				stream.push({
+					type: "error",
+					reason: "error",
+					error: partial,
+				});
 			}
 
 			stream.end();

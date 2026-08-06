@@ -21,6 +21,7 @@ const selectedId = ref<string | null>(null);
 const entries = ref<LiteratureEntry[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const truncated = ref(false);
 let loadToken = 0;
 
 const libraryArtifact = computed(() => paperStore.artifacts.find((artifact) => artifact.type === "literature_pool") ?? null);
@@ -55,13 +56,20 @@ async function loadLibrary(): Promise<void> {
 	entries.value = [];
 	selectedId.value = null;
 	error.value = null;
+	truncated.value = false;
 	if (!artifact) return;
 	loading.value = true;
 	try {
 		const content = await paperStore.readArtifact(artifact.id);
 		if (token !== loadToken) return;
 		if (content.kind !== "json" && content.kind !== "text") throw new Error("文献池不是可解析的 JSON 文件。");
-		entries.value = parseLiteratureLibrary(parseJsonValue(content.content));
+		const rawText = content.content ?? "";
+		const parsed = parseJsonValue(rawText);
+		if (rawText.trim() && parsed === undefined) {
+			throw new Error(content.truncated ? "文献池内容已截断，JSON 解析失败。" : "文献池 JSON 解析失败，文件可能已损坏。");
+		}
+		entries.value = parseLiteratureLibrary(parsed);
+		if (content.truncated) truncated.value = true;
 	} catch (err) {
 		if (token !== loadToken) return;
 		error.value = err instanceof Error ? err.message : "无法读取文献池";
@@ -86,7 +94,7 @@ function openExternal(artifactId: string): void {
 
 function openSource(): void {
 	if (selectedPdf.value) {
-		openArtifact(selectedPdf.value.id);
+		openExternal(selectedPdf.value.id);
 		return;
 	}
 	const url = selectedEntry.value?.url;
@@ -119,7 +127,8 @@ function sourceLabel(): string {
 		<div v-if="loading" class="library-state"><span class="spinner"></span><span>正在读取文献池...</span></div>
 		<div v-else-if="error" class="library-state error"><span class="mdi mdi-alert-circle-outline" aria-hidden="true"></span><span>{{ error }}</span></div>
 		<div v-else-if="entries.length === 0" class="library-state"><span class="mdi mdi-bookshelf" aria-hidden="true"></span><strong>{{ query ? "没有匹配的文献" : "文献池尚未登记" }}</strong><span>当 agent 登记 `literature/library.json` 后，论文记录会显示在这里。</span></div>
-		<div v-else class="library-layout">
+		<template v-else><div v-if="truncated" class="library-warning"><span class="mdi mdi-alert-outline" aria-hidden="true"></span> 文献池内容已截断，仅显示已加载的部分。</div>
+		<div class="library-layout">
 			<section class="literature-table" aria-label="文献列表">
 				<div class="table-head"><span>论文</span><span>作者 / 年份</span><span>相关性</span><span></span></div>
 				<button v-for="entry in filteredEntries" :key="entry.id" type="button" class="literature-row" :class="{ selected: selectedEntry?.id === entry.id }" @click="selectedId = entry.id">
@@ -143,6 +152,7 @@ function sourceLabel(): string {
 				<time class="detail-time">记录更新于 {{ formatDate(libraryArtifact?.createdAt) }}</time>
 			</aside>
 		</div>
+		</template>
 	</div>
 </template>
 
@@ -155,7 +165,8 @@ function sourceLabel(): string {
 
 .library-header,
 .library-toolbar,
-.library-layout {
+.library-layout,
+.library-warning {
 	max-width: 1220px;
 	margin-left: auto;
 	margin-right: auto;
@@ -276,6 +287,19 @@ h2 {
 	gap: 24px;
 	margin-top: 24px;
 	align-items: start;
+}
+
+.library-warning {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 16px;
+	padding: 8px 12px;
+	border: 1px solid var(--pix-warning);
+	border-radius: 5px;
+	background: var(--pix-warning-bg);
+	color: var(--pix-warning);
+	font-size: 11px;
 }
 
 .table-head,

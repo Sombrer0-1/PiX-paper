@@ -64,7 +64,10 @@ export interface PdfParseResult {
 	preview: string;
 }
 
-export async function parsePdfText(pdfPath: string, options: { maxPages?: number; saveTextTo?: string } = {}): Promise<PdfParseResult> {
+export async function parsePdfText(
+	pdfPath: string,
+	options: { maxPages?: number; saveTextTo?: string } = {},
+): Promise<PdfParseResult> {
 	const doc = await loadDocument(pdfPath);
 	try {
 		const pageCount = options.maxPages ? Math.min(options.maxPages, doc.numPages) : doc.numPages;
@@ -76,6 +79,16 @@ export async function parsePdfText(pdfPath: string, options: { maxPages?: number
 			let line = "";
 			for (const item of content.items) {
 				if (typeof item.str !== "string") continue;
+				// pdfjs splits a line into multiple runs; adjacent runs without
+				// trailing/leading whitespace merge into one token. Insert a
+				// space at the boundary to preserve word separation.
+				if (line.length > 0 && item.str.length > 0) {
+					const prevChar = line[line.length - 1];
+					const nextChar = item.str[0];
+					if (!/\s/.test(prevChar) && !/\s/.test(nextChar)) {
+						line += " ";
+					}
+				}
 				line += item.str;
 				if (item.hasEOL) {
 					lines.push(line);
@@ -172,7 +185,10 @@ function encodePng(width: number, height: number, data: Uint8Array | Uint8Clampe
 	return null;
 }
 
-async function resolveImage(page: PdfjsPage, name: string): Promise<{ data: Uint8Array | Uint8ClampedArray; width: number; height: number; kind: number } | null> {
+async function resolveImage(
+	page: PdfjsPage,
+	name: string,
+): Promise<{ data: Uint8Array | Uint8ClampedArray; width: number; height: number; kind: number } | null> {
 	const direct = page.objs.get(name) as { data?: Uint8Array; width?: number; height?: number; kind?: number } | null;
 	if (direct?.data && direct.width && direct.height && direct.kind != null) {
 		return { data: direct.data, width: direct.width, height: direct.height, kind: direct.kind };
@@ -222,13 +238,17 @@ export async function extractPdfFigures(
 							? (arg as { data: Uint8Array; width: number; height: number; kind: number })
 							: null;
 				if (!image) {
-					notes.push(`page ${pageNum}: image "${typeof arg === "string" ? arg : "inline"}" could not be decoded (skipped)`);
+					notes.push(
+						`page ${pageNum}: image "${typeof arg === "string" ? arg : "inline"}" could not be decoded (skipped)`,
+					);
 					continue;
 				}
 				if (image.width < 32 || image.height < 32) continue; // skip icons / artifacts
 				const png = encodePng(image.width, image.height, image.data, image.kind);
 				if (!png) {
-					notes.push(`page ${pageNum}: image "${typeof arg === "string" ? arg : "inline"}" has unsupported pixel format kind=${image.kind} (skipped)`);
+					notes.push(
+						`page ${pageNum}: image "${typeof arg === "string" ? arg : "inline"}" has unsupported pixel format kind=${image.kind} (skipped)`,
+					);
 					continue;
 				}
 				figureIndex += 1;
@@ -244,7 +264,9 @@ export async function extractPdfFigures(
 	}
 
 	if (figures.length === 0) {
-		notes.push("No embedded raster figures found. Figures drawn as vector graphics cannot be extracted; re-run on rendered page images if needed.");
+		notes.push(
+			"No embedded raster figures found. Figures drawn as vector graphics cannot be extracted; re-run on rendered page images if needed.",
+		);
 	}
 	return { path: pdfPath, figures, notes };
 }

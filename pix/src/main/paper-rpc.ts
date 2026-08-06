@@ -113,6 +113,7 @@ function mimeForExtension(extension: string): string {
 		case ".jpeg": return "image/jpeg";
 		case ".gif": return "image/gif";
 		case ".webp": return "image/webp";
+		case ".svg": return "image/svg+xml";
 		case ".pdf": return "application/pdf";
 		default: return "application/octet-stream";
 	}
@@ -177,7 +178,7 @@ async function readArtifactContent(engine: StageEngine, payload: { artifactId: s
 			truncated,
 		};
 	}
-	if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(extension) && !truncated) {
+	if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(extension) && !truncated) {
 		return {
 			artifactId: resolved.artifact.id,
 			revisionId: resolved.revision?.id,

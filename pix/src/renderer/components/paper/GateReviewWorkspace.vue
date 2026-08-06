@@ -36,7 +36,7 @@ watch(gate, (next) => {
 	reason.value = "";
 	compareOpen.value = false;
 	if (next) reworkTarget.value = next.stage;
-});
+}, { immediate: true });
 
 function handleExternalLink(event: MouseEvent): void {
 	const target = event.target;

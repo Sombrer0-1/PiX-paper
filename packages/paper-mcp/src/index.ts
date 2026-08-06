@@ -10,7 +10,7 @@
  * the project's .pi/mcp.json. Speaks MCP over stdio; logs go to stderr only.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -84,6 +84,7 @@ server.registerTool(
 			let titleHint = filename;
 			if (!pdfUrl && arxivId) {
 				pdfUrl = `https://arxiv.org/pdf/${arxivId}.pdf`;
+				titleHint ??= arxivId;
 			}
 			if (!pdfUrl) {
 				const lookup = s2PaperId ?? doi ?? arxivId;
@@ -221,9 +222,21 @@ server.registerTool(
 			let sourceText = "";
 			let sourceTitle = title ?? pdfPath ?? doi ?? "unknown";
 			if (pdfPath) {
-				const parsed = await parsePdfText(pdfPath, {});
-				sourceText = await readFile(parsed.textPath, "utf8");
-				sourceTitle = parsed.title ?? sourceTitle;
+				const textPath = `${pdfPath}.txt`;
+				let reuseExisting = false;
+				try {
+					const [txtStat, pdfStat] = await Promise.all([stat(textPath), stat(pdfPath)]);
+					reuseExisting = txtStat.mtimeMs >= pdfStat.mtimeMs;
+				} catch {
+					// .txt missing or stat failed -> fall through to parse.
+				}
+				if (reuseExisting) {
+					sourceText = await readFile(textPath, "utf8");
+				} else {
+					const parsed = await parsePdfText(pdfPath, {});
+					sourceText = await readFile(parsed.textPath, "utf8");
+					sourceTitle = parsed.title ?? sourceTitle;
+				}
 			} else if (doi || title) {
 				const paper = await getPaper(doi ?? title!);
 				if (!paper) throw new Error(`Source not found: ${doi ?? title}`);
@@ -250,7 +263,8 @@ server.registerTool(
 				claim,
 				sourceTitle,
 				evidence: scored,
-				verdictHint: scored.length === 0 ? "no-overlap-found" : scored[0].score >= 0.4 ? "plausible-overlap" : "weak-overlap",
+				verdictHint:
+					scored.length === 0 ? "no-overlap-found" : scored[0].score >= 0.4 ? "plausible-overlap" : "weak-overlap",
 			});
 		} catch (err) {
 			return errorResult(err);

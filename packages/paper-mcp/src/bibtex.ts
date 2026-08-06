@@ -4,7 +4,7 @@
  */
 
 import { getPaper, type PaperSummary } from "./semantic-scholar.ts";
-import { fetchBinary, HttpError } from "./util.ts";
+import { fetchBinary } from "./util.ts";
 
 export interface BibtexResult {
 	bibtex: string;
@@ -14,11 +14,28 @@ export interface BibtexResult {
 }
 
 function escapeBibtex(value: string): string {
-	return value.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
+	// Strip braces first (prevents field injection via unbalanced braces), then
+	// escape LaTeX-special characters so composed entries compile cleanly.
+	return value
+		.replace(/[{}]/g, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/&/g, "\\&")
+		.replace(/%/g, "\\%")
+		.replace(/\$/g, "\\$")
+		.replace(/#/g, "\\#")
+		.replace(/_/g, "\\_")
+		.replace(/\^/g, "\\textasciicircum{}")
+		.replace(/~/g, "\\textasciitilde{}");
 }
 
 export function suggestCiteKey(paper: PaperSummary): string {
-	const firstAuthor = paper.authors[0]?.split(" ").pop()?.toLowerCase().replace(/[^a-z]/g, "") ?? "anon";
+	const firstAuthor =
+		paper.authors[0]
+			?.split(" ")
+			.pop()
+			?.toLowerCase()
+			.replace(/[^a-z]/g, "") ?? "anon";
 	const year = paper.year ?? "nd";
 	const firstWord = paper.title
 		.toLowerCase()
@@ -44,6 +61,9 @@ function composeBibtex(paper: PaperSummary, citeKey: string): string {
 }
 
 async function fetchDoiBibtex(doi: string): Promise<string | null> {
+	// Best-effort: doi.org content negotiation can time out or rate-limit.
+	// Any failure returns null so generateBibtex falls through to the
+	// Semantic Scholar fallback rather than failing the whole call.
 	try {
 		const bytes = await fetchBinary(`https://doi.org/${encodeURIComponent(doi)}`, {
 			headers: { Accept: "application/x-bibtex" },
@@ -51,9 +71,8 @@ async function fetchDoiBibtex(doi: string): Promise<string | null> {
 		});
 		const text = new TextDecoder("utf-8").decode(bytes).trim();
 		return text.startsWith("@") ? text : null;
-	} catch (err) {
-		if (err instanceof HttpError) return null;
-		throw err;
+	} catch {
+		return null;
 	}
 }
 

@@ -5,7 +5,7 @@
  * No more subprocess spawning; the coding agent runs in-process.
  */
 
-import { BrowserWindow, Menu, app, shell } from "electron";
+import { BrowserWindow, Menu, app, dialog, shell } from "electron";
 import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { getCurrentStageEngine, registerIpcHandlers, setupEventForwarding } from "./ipc-handlers.js";
@@ -165,11 +165,27 @@ app.whenReady().then(() => {
 
 let quitting = false;
 
-app.on("window-all-closed", () => {
+app.on("window-all-closed", async () => {
   // On macOS, the app stays alive in the Dock; keep the session alive
   // so event forwarding works when the user reopens a window via activate.
-  // On other platforms, quit when all windows close.
+  // On other platforms, quit when all windows close - but if a paper agent
+  // is still running, ask before aborting it so the user can keep it in the
+  // background.
   if (process.platform !== "darwin") {
+    if (sessionBridge && sessionBridge.isRunning()) {
+      const result = await dialog.showMessageBox({
+        type: "question",
+        title: "PiX-paper",
+        message: "A paper agent is still running.",
+        detail: "Quitting will abort the running agent. Keep it running in the background?",
+        buttons: ["Keep running in background", "Quit"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (result.response === 0) {
+        return;
+      }
+    }
     quitting = true;
     void cleanup().finally(() => app.quit());
   }

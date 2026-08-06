@@ -144,7 +144,9 @@ async function readTokenResponse(response: Response, operation: TokenOperation):
 	return {
 		access: json.access_token,
 		refresh: json.refresh_token,
-		expires: Date.now() + json.expires_in * 1000,
+		// Subtract a 5-minute refresh buffer, matching the Anthropic and GitHub
+		// Copilot providers, to avoid 401s near expiry in long unattended runs.
+		expires: Date.now() + json.expires_in * 1000 - 5 * 60 * 1000,
 	};
 }
 

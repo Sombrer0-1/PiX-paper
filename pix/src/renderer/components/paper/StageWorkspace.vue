@@ -118,6 +118,14 @@ function activityLabel(kind: string): string {
 				>
 					<span class="mdi mdi-play" aria-hidden="true"></span> {{ stageActionLabel() }}
 				</button>
+				<button
+					v-else-if="stage?.status === 'awaiting_gate'"
+					type="button"
+					class="button button-primary"
+					@click="router.push('/workspace/gate')"
+				>
+					<span class="mdi mdi-clipboard-check-outline" aria-hidden="true"></span> 去审核
+				</button>
 				<span v-else class="stage-status-badge" :class="stage?.status">{{ statusLabel(stage?.status) }}</span>
 			</div>
 		</header>

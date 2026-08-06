@@ -186,10 +186,21 @@ function syncRouteState(): void {
 
 watch(() => route.fullPath, syncRouteState, { immediate: true });
 
+// Auto-open the agent log drawer when a clarification arrives so the blocking
+// question is never hidden behind a closed drawer (mirrors gate auto-navigate).
+watch(() => props.pendingUserInput, (next, prev) => {
+	if (next && !prev) setLogOpen(true);
+});
+
 onMounted(() => {
 	if (route.name === "workspace" && paperStore.activeView !== "dashboard") {
 		const persisted = paperStore.activeView;
 		if (persisted === "stage" && paperStore.selectedStage) void router.replace(`/workspace/stage/${paperStore.selectedStage}`);
+		else if (persisted === "gate" && !paperStore.pendingGate) {
+			// No gate is actually pending; avoid landing on an empty gate panel.
+			paperStore.setView("dashboard");
+			void router.replace("/workspace/dashboard");
+		}
 		else if (persisted !== "artifact") void router.replace(`/workspace/${persisted}`);
 	}
 });
@@ -204,7 +215,7 @@ onMounted(() => {
 				<span class="topbar-context">研究台</span>
 				<span v-if="paperStore.currentStage" class="topbar-stage">{{ paperStore.currentStage }}</span>
 			</div>
-			<div class="topbar-status"><span class="topbar-status-dot" :class="{ live: isStreaming }"></span><span>{{ isStreaming ? 'agent 运行中' : paperStore.pendingGate ? '等待审核' : '研究台已连接' }}</span></div>
+			<div class="topbar-status"><span class="topbar-status-dot" :class="{ live: isStreaming }"></span><span>{{ isStreaming ? 'agent 运行中' : pendingUserInput ? '等待你的回答' : paperStore.pendingGate ? '等待审核' : '研究台已连接' }}</span></div>
 			<div class="topbar-actions">
 				<div class="topbar-model-control">
 					<button

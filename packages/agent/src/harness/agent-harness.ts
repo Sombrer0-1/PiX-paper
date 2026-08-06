@@ -553,6 +553,7 @@ export class AgentHarness<
 	private async executeTurn(
 		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
+		abortController: AbortController,
 		options?: { images?: ImageContent[] },
 	): Promise<AssistantMessage> {
 		let activeTurnState = turnState;
@@ -576,7 +577,6 @@ export class AgentHarness<
 		});
 		if (beforeResult?.messages) messages = [...messages, ...beforeResult.messages];
 
-		const abortController = new AbortController();
 		const getTurnState = () => activeTurnState;
 		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
 			activeTurnState = nextTurnState;
@@ -631,13 +631,16 @@ export class AgentHarness<
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const turnState = await this.createTurnState();
-			return await this.executeTurn(turnState, text, options);
+			return await this.executeTurn(turnState, text, abortController, options);
 		} catch (error) {
 			this.phase = "idle";
 			throw normalizeHarnessError(error, "unknown");
 		} finally {
+			this.runAbortController = undefined;
 			finishRunPromise();
 		}
 	}
@@ -646,15 +649,22 @@ export class AgentHarness<
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const turnState = await this.createTurnState();
 			const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
 			if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
-			return await this.executeTurn(turnState, formatSkillInvocation(skill, additionalInstructions));
+			return await this.executeTurn(
+				turnState,
+				formatSkillInvocation(skill, additionalInstructions),
+				abortController,
+			);
 		} catch (error) {
 			this.phase = "idle";
 			throw normalizeHarnessError(error, "unknown");
 		} finally {
+			this.runAbortController = undefined;
 			finishRunPromise();
 		}
 	}
@@ -663,15 +673,18 @@ export class AgentHarness<
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const turnState = await this.createTurnState();
 			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
 			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
-			return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args));
+			return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args), abortController);
 		} catch (error) {
 			this.phase = "idle";
 			throw normalizeHarnessError(error, "unknown");
 		} finally {
+			this.runAbortController = undefined;
 			finishRunPromise();
 		}
 	}
@@ -710,6 +723,9 @@ export class AgentHarness<
 	): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown }> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "compact() requires idle harness");
 		this.phase = "compaction";
+		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const model = this.model;
 			if (!model) throw new AgentHarnessError("invalid_state", "No model set for compaction");
@@ -725,7 +741,7 @@ export class AgentHarness<
 				preparation,
 				branchEntries,
 				customInstructions,
-				signal: new AbortController().signal,
+				signal: abortController.signal,
 			});
 			if (hookResult?.cancel) throw new AgentHarnessError("compaction", "Compaction cancelled");
 			const provided = hookResult?.compaction;
@@ -737,7 +753,7 @@ export class AgentHarness<
 						auth.apiKey,
 						auth.headers,
 						customInstructions,
-						undefined,
+						abortController.signal,
 						this.thinkingLevel,
 					);
 			if (!compactResult.ok) throw compactResult.error;
@@ -757,7 +773,9 @@ export class AgentHarness<
 		} catch (error) {
 			throw normalizeHarnessError(error, "compaction");
 		} finally {
+			this.runAbortController = undefined;
 			this.phase = "idle";
+			finishRunPromise();
 		}
 	}
 
@@ -767,6 +785,9 @@ export class AgentHarness<
 	): Promise<NavigateTreeResult> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "navigateTree() requires idle harness");
 		this.phase = "branch_summary";
+		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const oldLeafId = await this.session.getLeafId();
 			if (oldLeafId === targetId) return { cancelled: false };
@@ -783,7 +804,7 @@ export class AgentHarness<
 				replaceInstructions: options?.replaceInstructions,
 				label: options?.label,
 			};
-			const signal = new AbortController().signal;
+			const signal = abortController.signal;
 			const hookResult = await this.emitHook({ type: "session_before_tree", preparation, signal });
 			if (hookResult?.cancel) return { cancelled: true };
 			let summaryEntry: NavigateTreeResult["summaryEntry"];
@@ -798,7 +819,7 @@ export class AgentHarness<
 					model,
 					apiKey: auth.apiKey,
 					headers: auth.headers,
-					signal: new AbortController().signal,
+					signal: abortController.signal,
 					customInstructions: hookResult?.customInstructions ?? options?.customInstructions,
 					replaceInstructions: hookResult?.replaceInstructions ?? options?.replaceInstructions,
 				});
@@ -857,7 +878,9 @@ export class AgentHarness<
 		} catch (error) {
 			throw normalizeHarnessError(error, "branch_summary");
 		} finally {
+			this.runAbortController = undefined;
 			this.phase = "idle";
+			finishRunPromise();
 		}
 	}
 

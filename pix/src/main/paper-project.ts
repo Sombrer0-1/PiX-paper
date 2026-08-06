@@ -14,7 +14,7 @@
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import {
 	PAPER_INBOX_VERSION,
@@ -74,32 +74,86 @@ export function isPaperProject(projectDir: string): boolean {
 	return existsSync(join(projectDir, PP_DIR));
 }
 
+/**
+ * Atomically replace a manifest file: copy the current content to
+ * `<target>.bak` (recovery source), write the new content to a temp file in
+ * the same directory, then rename it over the target. Same-directory rename is
+ * atomic on POSIX and Windows (same volume), so a crash mid-write leaves
+ * either the previous file or the complete new file, never a truncated
+ * manifest that would brick the project on the next load.
+ */
+async function writeFileAtomic(target: string, content: string): Promise<void> {
+	if (existsSync(target)) {
+		try {
+			await copyFile(target, `${target}.bak`);
+		} catch {
+			// Best-effort backup; a missing .bak only removes the recovery path.
+		}
+	}
+	const tmp = `${target}.${createId()}.tmp`;
+	try {
+		await writeFile(tmp, content, "utf8");
+		await rename(tmp, target);
+	} catch (err) {
+		try {
+			await rm(tmp, { force: true });
+		} catch {
+			// Ignore cleanup failures so the original error propagates.
+		}
+		throw err;
+	}
+}
+
 export async function loadPaperConfig(projectDir: string): Promise<PaperProjectConfig> {
 	const { configFile } = paperProjectPaths(projectDir);
-	const raw = await readFile(configFile, "utf8");
-	return JSON.parse(raw) as PaperProjectConfig;
+	try {
+		return JSON.parse(await readFile(configFile, "utf8")) as PaperProjectConfig;
+	} catch {
+		// Primary manifest is missing or corrupt; recover from the .bak kept by
+		// writeFileAtomic so a torn write or hand-edit does not brick the project.
+		try {
+			return JSON.parse(await readFile(`${configFile}.bak`, "utf8")) as PaperProjectConfig;
+		} catch (err) {
+			throw new Error(
+				`Paper project config is corrupt and could not be recovered from backup: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	}
 }
 
 export async function savePaperConfig(projectDir: string, config: PaperProjectConfig): Promise<void> {
 	const { ppDir, configFile } = paperProjectPaths(projectDir);
 	await mkdir(ppDir, { recursive: true });
-	await writeFile(configFile, JSON.stringify(config, null, 2), "utf8");
+	await writeFileAtomic(configFile, JSON.stringify(config, null, 2));
 }
 
 /**
  * Load progress, defensively filling in any missing stages so older or
- * hand-edited manifests stay forward-compatible with the state machine.
+ * hand-edited manifests stay forward-compatible with the state machine. A
+ * corrupt or truncated manifest falls back to the .bak, then to initial
+ * progress, so the project always remains openable.
  */
 export async function loadPaperProgress(projectDir: string): Promise<PaperProgress> {
 	const { progressFile } = paperProjectPaths(projectDir);
-	const raw = await readFile(progressFile, "utf8");
-	return migratePaperProgress(JSON.parse(raw) as unknown);
+	try {
+		const raw = await readFile(progressFile, "utf8");
+		return migratePaperProgress(JSON.parse(raw) as unknown);
+	} catch {
+		try {
+			const bak = await readFile(`${progressFile}.bak`, "utf8");
+			return migratePaperProgress(JSON.parse(bak) as unknown);
+		} catch {
+			return createInitialProgress();
+		}
+	}
 }
 
 export async function savePaperProgress(projectDir: string, progress: PaperProgress): Promise<void> {
 	const { ppDir, progressFile } = paperProjectPaths(projectDir);
 	await mkdir(ppDir, { recursive: true });
-	await writeFile(progressFile, JSON.stringify(progress, null, 2), "utf8");
+	await writeFileAtomic(progressFile, JSON.stringify(progress, null, 2));
 }
 
 export async function loadPaperInbox(projectDir: string, projectId: string): Promise<PaperInbox> {

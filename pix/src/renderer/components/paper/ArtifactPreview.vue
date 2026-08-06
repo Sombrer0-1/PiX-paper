@@ -25,6 +25,7 @@ const PREVIEW_MAX_CHARS = 12_000;
 const PREVIEW_MAX_LINES = 180;
 
 const textContent = computed(() => content.value?.content ?? "");
+const isTruncated = computed(() => content.value?.truncated === true);
 const textStats = computed(() => {
 	const text = textContent.value;
 	return {
@@ -101,10 +102,10 @@ watch(() => [props.artifactId, props.revisionId], () => {
 		<div v-else-if="content.kind === 'text' || content.kind === 'json'" class="preview-text">
 			<div v-if="content.truncated" class="preview-warning">文件较大，预览内容已截断。</div>
 			<div v-if="isLongText" class="preview-summary">
-				<span>{{ expanded ? `已展开 ${textStats.characters.toLocaleString()} 个字符` : `${hiddenTextSummary}。` }}</span>
+				<span>{{ expanded ? `已${isTruncated ? '展开预览' : '展开'} ${textStats.characters.toLocaleString()} 个字符` : `${hiddenTextSummary}。` }}</span>
 				<button type="button" class="preview-toggle" :aria-expanded="expanded" @click="toggleExpanded">
 					<span class="mdi" :class="expanded ? 'mdi-chevron-up' : 'mdi-chevron-down'" aria-hidden="true"></span>
-					{{ expanded ? '收起全文' : '展开全文' }}
+					{{ expanded ? (isTruncated ? '收起预览' : '收起全文') : (isTruncated ? '展开预览' : '展开全文') }}
 				</button>
 			</div>
 			<div v-if="content.mimeType === 'text/markdown'" class="markdown-body" v-html="renderMarkdown(displayText)" @click="handleExternalLink"></div>

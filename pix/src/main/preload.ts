@@ -61,7 +61,6 @@ export interface PixApi {
 
   // Event subscriptions
   onPiEvent: (callback: (event: AgentSessionEvent) => void) => () => void;
-  onPiResponse: (callback: (response: unknown) => void) => () => void;
   onPiExit: (callback: (data: { code: number | null; signal: string | null; stderr: string }) => void) => () => void;
   onPiError: (callback: (err: { message: string }) => void) => () => void;
   onPiReady: (callback: () => void) => () => void;
@@ -152,11 +151,6 @@ const api: PixApi = {
     const handler = (_event: Electron.IpcRendererEvent, data: AgentSessionEvent) => callback(data);
     ipcRenderer.on("pi-event", handler);
     return () => ipcRenderer.removeListener("pi-event", handler);
-  },
-  onPiResponse: (callback: (response: unknown) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data);
-    ipcRenderer.on("pi-response", handler);
-    return () => ipcRenderer.removeListener("pi-response", handler);
   },
   onPiExit: (callback: (data: { code: number | null; signal: string | null; stderr: string }) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { code: number | null; signal: string | null; stderr: string }) => callback(data);

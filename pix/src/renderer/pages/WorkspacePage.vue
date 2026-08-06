@@ -99,7 +99,7 @@ async function respondUserInput(cancelled = false): Promise<void> {
 		cancelled,
 	};
 	try {
-		const result = await rpc.sendCommand({ type: "respond_user_input", response });
+		const result = await window.pixApi.sendCommand({ type: "respond_user_input", response });
 		if (!result.success) throw new Error(result.error ?? "无法提交澄清回答");
 		if (pendingUserInput.value?.id === request.id) {
 			pendingUserInput.value = null;

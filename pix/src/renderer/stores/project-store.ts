@@ -71,6 +71,19 @@ function normalizePath(path: string | undefined): string {
   return (path || "").replace(/\\/g, "/").toLowerCase();
 }
 
+/**
+ * PiX-paper is paper-only: filter out recent entries that are not paper projects
+ * (e.g. coding folders previously opened in PiX). Non-destructive - the
+ * underlying settings are not mutated. Must be applied to every assignment of
+ * recentProjects so hidden non-paper folders never reappear on Home.
+ */
+async function filterPaperProjects(projects: ProjectInfo[]): Promise<ProjectInfo[]> {
+  const checks = await Promise.all(
+    projects.map((p) => api().paperCheckProject(p.path).catch(() => false)),
+  );
+  return projects.filter((_, i) => checks[i]);
+}
+
 export const useProjectStore = defineStore("project", () => {
   const recentProjects = ref<ProjectInfo[]>([]);
   const currentProject = ref<ProjectInfo | null>(null);
@@ -81,14 +94,7 @@ export const useProjectStore = defineStore("project", () => {
   async function loadSettings(): Promise<void> {
     try {
       const settings = await api().getSettings();
-      const all = settings.recentProjects || [];
-      // PiX-paper is paper-only: hide recent entries that are not paper projects
-      // (e.g. coding folders previously opened in PiX). Non-destructive - the
-      // underlying settings are not mutated.
-      const checks = await Promise.all(
-        all.map((p) => api().paperCheckProject(p.path).catch(() => false)),
-      );
-      recentProjects.value = all.filter((_, i) => checks[i]);
+      recentProjects.value = await filterPaperProjects(settings.recentProjects || []);
     } catch {
       // Settings not available yet
     }
@@ -121,7 +127,7 @@ export const useProjectStore = defineStore("project", () => {
         ].slice(0, 20);
       }
       await api().setSettings({ recentProjects: updated });
-      recentProjects.value = updated;
+      recentProjects.value = await filterPaperProjects(updated);
     } catch {
       // Non-critical
     }
@@ -136,7 +142,7 @@ export const useProjectStore = defineStore("project", () => {
       const settings = await api().getSettings();
       const latest = (settings.recentProjects || []).filter((project: ProjectInfo) => project.path !== path);
       await api().setSettings({ recentProjects: latest });
-      recentProjects.value = latest;
+      recentProjects.value = await filterPaperProjects(latest);
     } catch (err) {
       console.error("[project-store] Failed to remove recent project:", err);
       await loadSettings();
@@ -153,13 +159,13 @@ export const useProjectStore = defineStore("project", () => {
       const projects = settings.recentProjects || [];
       const existing = projects.findIndex((project: ProjectInfo) => project.path === projectPath);
       if (existing === -1 || projects[existing]?.sessionCount === sessionCount) {
-        if (existing !== -1) recentProjects.value = projects;
+        if (existing !== -1) recentProjects.value = await filterPaperProjects(projects);
         return;
       }
       const updated = [...projects];
       updated[existing] = { ...updated[existing], sessionCount };
       await api().setSettings({ recentProjects: updated });
-      recentProjects.value = updated;
+      recentProjects.value = await filterPaperProjects(updated);
     } catch {
       // Non-critical; the session list itself is still current.
     }

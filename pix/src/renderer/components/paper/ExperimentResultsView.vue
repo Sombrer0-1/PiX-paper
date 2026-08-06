@@ -42,17 +42,59 @@ function textValue(value: unknown, fallback = "暂无"): string {
 	return fallback;
 }
 
+function parseCsvRows(text: string): string[][] {
+	const rows: string[][] = [];
+	let field = "";
+	let row: string[] = [];
+	let inQuotes = false;
+	let rowHasContent = false;
+	const pushField = (): void => { row.push(field); field = ""; };
+	const pushRow = (): void => {
+		if (rowHasContent) rows.push(row);
+		row = [];
+		rowHasContent = false;
+	};
+	for (let i = 0; i < text.length; i++) {
+		const char = text[i];
+		if (inQuotes) {
+			if (char === '"') {
+				if (text[i + 1] === '"') { field += '"'; i++; }
+				else inQuotes = false;
+			} else {
+				field += char;
+			}
+			rowHasContent = true;
+		} else if (char === '"') {
+			inQuotes = true;
+			rowHasContent = true;
+		} else if (char === ",") {
+			pushField();
+			rowHasContent = true;
+		} else if (char === "\n") {
+			pushField();
+			pushRow();
+		} else if (char !== "\r") {
+			field += char;
+			rowHasContent = true;
+		}
+	}
+	if (rowHasContent || field !== "" || row.length > 0) {
+		pushField();
+		rows.push(row);
+	}
+	return rows;
+}
+
 function csvRecords(text: string): Record<string, unknown>[] {
-	const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-	if (lines.length < 2) return [];
-	const headers = lines[0].split(",").map((header) => header.trim());
-	return lines.slice(1).map((line) => {
-		const values = line.split(",");
-		return headers.reduce<Record<string, unknown>>((record, header, index) => {
-			record[header] = values[index]?.trim() ?? "";
+	const rows = parseCsvRows(text);
+	if (rows.length < 2) return [];
+	const headers = rows[0].map((header) => header.trim());
+	return rows.slice(1)
+		.filter((row) => row.some((field) => field.trim() !== ""))
+		.map((row) => headers.reduce<Record<string, unknown>>((record, header, index) => {
+			record[header] = row[index]?.trim() ?? "";
 			return record;
-		}, {});
-	});
+		}, {}));
 }
 
 function recordsFromContent(content: { content?: string; path: string; mimeType: string }): unknown[] {
@@ -69,7 +111,7 @@ function rowsFromRecord(record: unknown, artifact: Artifact, index: number): Met
 	const value = recordValue(record);
 	const metadata = artifact.metadata;
 	if (!value) {
-		return [{ id: `${artifact.id}-${index}`, artifact, config: metadataText(artifact, "config"), seed: metadataText(artifact, "seed"), metric: metadataText(artifact, "metric"), value: textValue(record), split: metadataText(artifact, "split"), status: metadataText(artifact, "status"), command: metadataText(artifact, "command") }];
+		return [{ id: `${artifact.id}-${index}`, artifact, config: metadataText(artifact, "config"), seed: metadataText(artifact, "seed"), metric: metadataText(artifact, "metric"), value: textValue(record), split: metadataText(artifact, "split"), status: metadataText(artifact, "status"), command: metadataText(artifact, "command", "暂无") }];
 	}
 	const nestedMetrics = value.metrics;
 	if (nestedMetrics && typeof nestedMetrics === "object" && !Array.isArray(nestedMetrics)) {
@@ -106,11 +148,17 @@ async function loadResults(): Promise<void> {
 	loading.value = true;
 	try {
 		const loaded = await Promise.all(resultArtifacts.value.map(async (artifact) => {
-			const content = await paperStore.readArtifact(artifact.id);
-			return { artifact, content };
+			try {
+				const content = await paperStore.readArtifact(artifact.id);
+				return { artifact, content };
+			} catch {
+				return null;
+			}
 		}));
 		if (token !== loadToken) return;
-		rows.value = loaded.flatMap(({ artifact, content }) => recordsFromContent(content).flatMap((record, index) => rowsFromRecord(record, artifact, index)));
+		rows.value = loaded.flatMap((entry) => entry
+			? recordsFromContent(entry.content).flatMap((record, index) => rowsFromRecord(record, entry.artifact, index))
+			: []);
 		if (rows.value.length === 0) {
 			rows.value = resultArtifacts.value.map((artifact) => ({
 				id: artifact.id,
@@ -121,7 +169,7 @@ async function loadResults(): Promise<void> {
 				value: metadataText(artifact, "value"),
 				split: metadataText(artifact, "split"),
 				status: metadataText(artifact, "status"),
-				command: metadataText(artifact, "command"),
+				command: metadataText(artifact, "command", "暂无"),
 			}));
 		}
 	} catch (err) {
